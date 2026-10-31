@@ -116,6 +116,26 @@
       .replace(/^_+|_+$/g, '');
   }
 
+  /** 是否含中日韩字符（用于决定姓名拼接顺序与分隔符） */
+  function isCjkText(text) {
+    return /[\u3400-\u9fff\uf900-\ufaff\u3040-\u30ff]/.test(typeof text === 'string' ? text : '');
+  }
+
+  /**
+   * 姓名自动拼接：中文习惯「姓 + 名」不留空格（张 + 三 = 张三），
+   * 拉丁字母习惯「名 姓」（San + Zhang = San Zhang，与迭代 1 行为一致，避免回归）。
+   * 只有一边有值时直接返回那一边。
+   */
+  function composeFullName(firstName, lastName) {
+    var first = sanitizeText(firstName);
+    var last = sanitizeText(lastName);
+    if (!first && !last) return '';
+    if (!first) return last;
+    if (!last) return first;
+    if (isCjkText(first) || isCjkText(last)) return last + first;
+    return first + ' ' + last;
+  }
+
   /** 生成 custom_field_1/2… 形式的兜底 key，existing 可以是 key 数组或字段数组 */
   function nextCustomKey(existing) {
     var used = Object.create(null);
@@ -171,9 +191,31 @@
   function createEmptyResume() {
     var basics = {};
     for (var i = 0; i < BASICS_KEYS.length; i++) basics[BASICS_KEYS[i]] = '';
-    var resume = { version: RESUME_VERSION, basics: basics, customFields: [], updatedAt: null };
+    var resume = {
+      version: RESUME_VERSION,
+      basics: basics,
+      customFields: [],
+      updatedAt: null,
+      // 迭代 3：用户手改过 fullName 后不再被「姓 + 名」自动覆盖
+      fullNameManual: false,
+      // 迭代 3：模板预置项只播种一次，删掉后不再自动长回来
+      presetsSeeded: false
+    };
     for (var j = 0; j < TOP_KEYS.length; j++) resume[TOP_KEYS[j]] = '';
     return resume;
+  }
+
+  /**
+   * 自定义字段的分组 id（迭代 3 模板用 basic/intent/extra）。
+   * 只做保守的白名单式校验：不认识的分组直接丢掉，交给模板落到默认组。
+   */
+  var CUSTOM_GROUP_RE = /^[a-z][a-z0-9_]{0,19}$/;
+  var DEFAULT_CUSTOM_GROUP = 'extra';
+
+  function normalizeCustomGroup(value) {
+    if (typeof value !== 'string') return '';
+    var group = value.trim().toLowerCase();
+    return CUSTOM_GROUP_RE.test(group) ? group : '';
   }
 
   /**
@@ -199,7 +241,11 @@
           : typeof item.value === 'number' && isFinite(item.value)
             ? String(item.value)
             : '';
-      out.push({ key: key, label: label, value: value });
+      var group = normalizeCustomGroup(item.group);
+      var entry = { key: key, label: label, value: value };
+      if (group) entry.group = group;
+      if (item.preset === true) entry.preset = true;
+      out.push(entry);
     }
     return out;
   }
@@ -254,7 +300,11 @@
         warnings.push('自定义字段「' + label + '」的 value 超过 ' + CUSTOM_VALUE_MAX + ' 字符，已截断');
       }
       seen[key] = true;
-      fields.push({ key: key, label: label, value: value });
+      var entry = { key: key, label: label, value: value };
+      var group = normalizeCustomGroup(item.group);
+      if (group) entry.group = group;
+      if (item.preset === true) entry.preset = true;
+      fields.push(entry);
     }
     return { fields: fields, warnings: warnings };
   }
@@ -311,6 +361,8 @@
 
     out.updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : null;
     out.customFields = migrateCustomFields(raw.customFields);
+    out.fullNameManual = raw.fullNameManual === true;
+    out.presetsSeeded = raw.presetsSeeded === true;
     return out;
   }
 
@@ -394,11 +446,9 @@
     switch (fieldKey) {
       case 'fullName':
         v = basics.fullName;
-        if (!v) {
-          var joined = [sanitizeText(basics.firstName), sanitizeText(basics.lastName)]
-            .filter(Boolean)
-            .join(' ');
-          v = joined;
+        // 用户手改过就不再用「姓 + 名」覆盖，哪怕他手动清空了
+        if (!v && resume.fullNameManual !== true) {
+          v = composeFullName(basics.firstName, basics.lastName);
         }
         break;
       case 'summary':
@@ -467,6 +517,11 @@
     FORM_FIELDS: FORM_FIELDS,
     isPlainObject: isPlainObject,
     sanitizeText: sanitizeText,
+    isCjkText: isCjkText,
+    composeFullName: composeFullName,
+    CUSTOM_GROUP_RE: CUSTOM_GROUP_RE,
+    DEFAULT_CUSTOM_GROUP: DEFAULT_CUSTOM_GROUP,
+    normalizeCustomGroup: normalizeCustomGroup,
     slugifyKey: slugifyKey,
     nextCustomKey: nextCustomKey,
     isBuiltinFieldKey: isBuiltinFieldKey,

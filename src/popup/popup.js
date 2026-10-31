@@ -1,7 +1,10 @@
 /**
  * JustClick — popup
- * 读本地简历 → 向当前标签页的 content script 发填充指令 → 展示结果与缺口；
- * 迭代 2 增加「从当前页学习」：扫描字段 → 用户选目标 → 生成并保存规则。
+ *
+ * 迭代 3 起 popup 有两条主线：
+ *   1. 一键填充 → 渲染「填充报告」三区块（已填 / 待填 / 未匹配）
+ *   2. 待填项：当场内联补填（写存储 + 只填这一个框，绝不提交表单），或者挂到 pendingItems 里跨页携带
+ * 迭代 2 的「从当前页学习」保持不变。
  */
 (function () {
   'use strict';
@@ -23,13 +26,42 @@
     missingChips: document.getElementById('missing-chips'),
     updatedAt: document.getElementById('updated-at'),
     optionsBtn: document.getElementById('options-btn'),
-    refreshBtn: document.getElementById('refresh-btn')
+    refreshBtn: document.getElementById('refresh-btn'),
+
+    // 待填横幅
+    pendingBanner: document.getElementById('pending-banner'),
+    pendingTitle: document.getElementById('pending-title'),
+    pendingToggle: document.getElementById('pending-toggle'),
+    pendingClear: document.getElementById('pending-clear'),
+    pendingList: document.getElementById('pending-list'),
+
+    // 报告
+    report: document.getElementById('report'),
+    reportTitle: document.getElementById('report-title'),
+    reportTime: document.getElementById('report-time'),
+    blockFilled: document.getElementById('block-filled'),
+    filledTitle: document.getElementById('filled-title'),
+    filledList: document.getElementById('filled-list'),
+    blockMissing: document.getElementById('block-missing'),
+    missingTitle: document.getElementById('missing-title'),
+    missingList: document.getElementById('missing-list'),
+    blockUnmatched: document.getElementById('block-unmatched'),
+    unmatchedTitle: document.getElementById('unmatched-title'),
+    unmatchedList: document.getElementById('unmatched-list'),
+    copyReport: document.getElementById('copy-report'),
+    copyStatus: document.getElementById('copy-status')
   };
 
   var resume = null;
   var busy = false;
   var learnEntries = [];
   var learnHost = '';
+  var pendingItems = [];
+  var lastReport = null;
+  var activeTabId = null;
+  var activeUrl = '';
+
+  /* ---------------------------------------------------------------- 小工具 */
 
   function fieldKeys() {
     if (window.JC && typeof window.JC.getFieldKeys === 'function') return window.JC.getFieldKeys(resume);
@@ -49,6 +81,20 @@
     }
     return ready;
   }
+
+  function hostOf(url) {
+    try {
+      return new URL(url).host;
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function setText(node, value) {
+    if (node) node.textContent = value;
+  }
+
+  /* ------------------------------------------------------------ 简历概况 */
 
   function renderProfile() {
     var keys = fieldKeys();
@@ -76,11 +122,7 @@
     }
 
     els.fillBtn.disabled = ready.length === 0;
-    if (ready.length === 0) {
-      els.fillBtn.textContent = '先填写简历';
-    } else {
-      els.fillBtn.textContent = '一键填充当前页面';
-    }
+    els.fillBtn.textContent = ready.length === 0 ? '先填写简历' : '一键填充当前页面';
   }
 
   function showResult(kind, title, sub) {
@@ -104,7 +146,8 @@
     els.learnStatus.className = 'learn-status' + (kind ? ' ' + kind : '');
   }
 
-  /** content script 可能因安装前已打开的页面而缺失，这里按需补注入 */
+  /* -------------------------------------------------------- content 注入 */
+
   async function ensureContentScript(tabId) {
     try {
       var pong = await chrome.tabs.sendMessage(tabId, { type: 'JC_PING' });
@@ -153,7 +196,324 @@
       showResult('error', '注入失败', '请刷新目标页面后重试，或检查是否被浏览器策略拦截。');
       return null;
     }
+    activeTabId = tab.id;
+    activeUrl = tab.url || '';
     return tab;
+  }
+
+  /* -------------------------------------------------------------- 报告渲染 */
+
+  function renderFilledList(report) {
+    els.filledList.innerHTML = '';
+    var list = report.filled || [];
+    if (!list.length) {
+      var empty = document.createElement('li');
+      empty.className = 'report-empty';
+      empty.textContent = '这一页没有可填的字段';
+      els.filledList.appendChild(empty);
+    }
+    list.forEach(function (item) {
+      var li = document.createElement('li');
+      li.className = 'report-item';
+      var key = document.createElement('span');
+      key.className = 'ri-key';
+      key.textContent = item.label;
+      li.appendChild(key);
+      li.appendChild(document.createTextNode(' = '));
+      var value = document.createElement('span');
+      value.className = 'ri-value';
+      value.textContent = item.display || item.value || '';
+      li.appendChild(value);
+
+      if (item.truncated) {
+        var toggle = document.createElement('button');
+        toggle.type = 'button';
+        toggle.className = 'link tiny';
+        toggle.textContent = '展开';
+        toggle.addEventListener('click', function () {
+          var expanded = toggle.getAttribute('data-expanded') === '1';
+          value.textContent = expanded ? item.display : item.value;
+          toggle.textContent = expanded ? '展开' : '收起';
+          toggle.setAttribute('data-expanded', expanded ? '0' : '1');
+        });
+        li.appendChild(toggle);
+      }
+      els.filledList.appendChild(li);
+    });
+    setText(els.filledTitle, '已填 ' + list.length + ' 项');
+  }
+
+  function renderMissingList(report) {
+    els.missingList.innerHTML = '';
+    var list = report.missing || [];
+    els.blockMissing.hidden = list.length === 0;
+    setText(els.missingTitle, '待填 ' + list.length + ' 项');
+
+    list.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'missing-row';
+      row.setAttribute('data-missing-key', item.key);
+
+      var label = document.createElement('span');
+      label.className = 'mr-label';
+      label.textContent = item.label;
+      row.appendChild(label);
+
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'mr-input';
+      input.placeholder = '补上「' + item.label + '」';
+      input.autocomplete = 'off';
+      row.appendChild(input);
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'primary small';
+      btn.textContent = '补填';
+      row.appendChild(btn);
+
+      var status = document.createElement('span');
+      status.className = 'mr-status';
+      row.appendChild(status);
+
+      function submit() {
+        var value = input.value;
+        btn.disabled = true;
+        status.className = 'mr-status';
+        status.textContent = '填充中…';
+        supplementValue(item.key, item.label, value).then(function (result) {
+          btn.disabled = false;
+          if (!result.ok) {
+            status.className = 'mr-status warn';
+            status.textContent = result.error;
+            return;
+          }
+          row.remove();
+          var left = els.missingList.querySelectorAll('.missing-row').length;
+          setText(els.missingTitle, '待填 ' + left + ' 项');
+          if (!left) els.blockMissing.hidden = true;
+          if (result.pageFilled === false) {
+            showResult('error', '已存进简历，但页面没填上', result.error || '可以刷新页面后再点一次填充。');
+          } else {
+            showResult('ok', '已补填 1 项：' + item.label, '值已保存，页面上这个框已填好（未提交表单）。');
+          }
+        });
+      }
+
+      btn.addEventListener('click', submit);
+      input.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submit();
+        }
+      });
+      els.missingList.appendChild(row);
+    });
+  }
+
+  function renderUnmatchedList(report) {
+    els.unmatchedList.innerHTML = '';
+    var list = report.unmatched || [];
+    els.blockUnmatched.hidden = list.length === 0;
+    setText(els.unmatchedTitle, '未匹配 ' + list.length + ' 项（简历有值、页面没有对应输入框）');
+    list.forEach(function (item) {
+      var li = document.createElement('li');
+      li.className = 'report-item muted';
+      var key = document.createElement('span');
+      key.className = 'ri-key';
+      key.textContent = item.label;
+      li.appendChild(key);
+      if (item.value) {
+        li.appendChild(document.createTextNode(' = '));
+        var value = document.createElement('span');
+        value.className = 'ri-value';
+        value.textContent = item.display || item.value;
+        li.appendChild(value);
+      }
+      els.unmatchedList.appendChild(li);
+    });
+  }
+
+  function renderReport(report) {
+    if (!report) return;
+    lastReport = report;
+    els.report.hidden = false;
+    var counts = report.counts || { filled: 0, missing: 0, unmatched: 0 };
+    setText(
+      els.reportTitle,
+      '填充报告：已填 ' + counts.filled + ' · 待填 ' + counts.missing + ' · 未匹配 ' + counts.unmatched
+    );
+    var when = report.at ? new Date(report.at) : null;
+    setText(els.reportTime, when && !isNaN(when.getTime()) ? when.toLocaleTimeString('zh-CN') : '');
+    els.copyStatus.textContent = '';
+    renderFilledList(report);
+    renderMissingList(report);
+    renderUnmatchedList(report);
+  }
+
+  /* ---------------------------------------------------------- 待填横幅 */
+
+  function renderPending() {
+    var summary = window.JC.summary(pendingItems);
+    if (!summary.count) {
+      els.pendingBanner.hidden = true;
+      els.pendingList.hidden = true;
+      els.pendingToggle.textContent = '展开';
+      return;
+    }
+    els.pendingBanner.hidden = false;
+    els.pendingTitle.textContent = summary.label;
+    els.pendingClear.hidden = false;
+    renderPendingList();
+  }
+
+  function renderPendingList() {
+    els.pendingList.innerHTML = '';
+    pendingItems.forEach(function (item) {
+      var row = document.createElement('div');
+      row.className = 'pending-row';
+      row.setAttribute('data-pending-key', item.key);
+
+      var label = document.createElement('span');
+      label.className = 'mr-label';
+      label.textContent = item.label;
+      row.appendChild(label);
+
+      var input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'mr-input';
+      input.placeholder = '补上「' + item.label + '」';
+      input.autocomplete = 'off';
+      row.appendChild(input);
+
+      var fill = document.createElement('button');
+      fill.type = 'button';
+      fill.className = 'primary small';
+      fill.textContent = '补填';
+      row.appendChild(fill);
+
+      var ignore = document.createElement('button');
+      ignore.type = 'button';
+      ignore.className = 'link tiny';
+      ignore.textContent = '忽略';
+      row.appendChild(ignore);
+
+      var status = document.createElement('span');
+      status.className = 'mr-status';
+      row.appendChild(status);
+
+      fill.addEventListener('click', function () {
+        fill.disabled = true;
+        status.textContent = '填充中…';
+        supplementValue(item.key, item.label, input.value).then(function (result) {
+          fill.disabled = false;
+          if (!result.ok) {
+            status.className = 'mr-status warn';
+            status.textContent = result.error;
+            return;
+          }
+          status.className = 'mr-status';
+          status.textContent = result.pageFilled === false ? '已存简历，页面未填上' : '已补填 ✓';
+          if (result.pageFilled === false) {
+            showResult('error', '已存进简历，但页面没填上', result.error || '可以刷新页面后再点一次填充。');
+          }
+        });
+      });
+
+      ignore.addEventListener('click', function () {
+        window.JC.removePendingItem(item.key).then(function () {
+          refreshPending();
+        });
+      });
+
+      els.pendingList.appendChild(row);
+    });
+  }
+
+  async function refreshPending() {
+    try {
+      var bag = await window.JC.getPendingItems();
+      pendingItems = bag.items || [];
+    } catch (e) {
+      pendingItems = [];
+    }
+    renderPending();
+  }
+
+  /* ---------------------------------------------------------- 内联补填 */
+
+  /**
+   * 补填一个字段：写简历存储 → 生成增量指令 → 交给 content script 只填这一个框。
+   * 无论页面填充是否成功，值都已经存下来了；页面失败只提示，不假装成功。
+   */
+  async function supplementValue(key, label, value) {
+    var applied = window.JC.applySupplement(resume, key, value, { label: label, group: 'extra' });
+    if (!applied.ok) {
+      return { ok: false, error: (applied.errors || ['补填失败']).join('；') };
+    }
+
+    var saved = await window.JC.saveResume(applied.resume);
+    if (!saved.ok) {
+      return { ok: false, error: '保存失败：' + (saved.errors || []).join('；') };
+    }
+    resume = saved.resume;
+    renderProfile();
+
+    var instruction = window.JC.buildFillOneInstruction({
+      key: applied.key,
+      value: value,
+      label: applied.label,
+      url: activeUrl
+    });
+    if (!window.JC.isNonSubmittingInstruction(instruction)) {
+      return { ok: false, error: '增量指令异常，已中止（不会提交表单）' };
+    }
+
+    await window.JC.removePendingItem(applied.key);
+    await refreshPending();
+    moveReportItemToFilled(applied.key, applied.label, value);
+
+    if (!activeTabId) {
+      var tab = await currentTab();
+      if (tab && tab.id) {
+        activeTabId = tab.id;
+        activeUrl = tab.url || activeUrl;
+      }
+    }
+    if (!activeTabId) {
+      return { ok: true, pageFilled: false, error: '已保存到简历，但没有可填充的标签页' };
+    }
+
+    var res;
+    try {
+      res = await chrome.tabs.sendMessage(activeTabId, instruction);
+    } catch (e) {
+      res = { ok: false, error: String((e && e.message) || e) };
+    }
+    if (!res || !res.ok) {
+      return { ok: true, pageFilled: false, error: '已保存到简历，页面填充失败：' + ((res && res.error) || '未知错误') };
+    }
+    return { ok: true, pageFilled: true };
+  }
+
+  /** 补填成功后把报告里的这一项从「待填」挪到「已填」 */
+  function moveReportItemToFilled(key, label, value) {
+    if (!lastReport) return;
+    var missing = [];
+    for (var i = 0; i < (lastReport.missing || []).length; i++) {
+      if (lastReport.missing[i].key !== key) missing.push(lastReport.missing[i]);
+    }
+    var cut = window.JC.truncateValue(value, window.JC.MAX_VALUE_LEN);
+    lastReport.filled = (lastReport.filled || []).concat([
+      { key: key, label: label, value: value, display: cut.display, truncated: cut.truncated }
+    ]);
+    lastReport.missing = missing;
+    lastReport.counts = {
+      filled: lastReport.filled.length,
+      missing: missing.length,
+      unmatched: (lastReport.unmatched || []).length
+    };
+    renderFilledList(lastReport);
   }
 
   /* -------------------------------------------------------------- 一键填充 */
@@ -194,19 +554,22 @@
         }
       }
 
-      if (res.filled > 0) {
-        var subs = [];
-        if (res.missing && res.missing.length) subs.push('简历缺少：' + res.missing.join('、'));
-        if (res.notFound && res.notFound.length) subs.push('页面没找到：' + res.notFound.join('、'));
-        if (res.failures && res.failures.length) subs.push('写入失败：' + res.failures.join('、'));
-        showResult('ok', '已填 ' + res.filled + ' 项：' + res.filledLabels.join('、'), subs.join('\n'));
-      } else if (res.scanned === 0) {
-        showResult('error', '没发现表单', '这个页面似乎没有可填的输入框。');
-      } else {
-        var why = [];
-        if (res.missing && res.missing.length) why.push('简历缺少：' + res.missing.join('、'));
-        if (res.notFound && res.notFound.length) why.push('页面没找到：' + res.notFound.join('、'));
-        showResult('error', '没找到可填字段', why.join('\n') || '识别到的 ' + res.scanned + ' 个输入框都不匹配简历字段。');
+      var report = window.JC.reportFromFillResult(res, { url: tab.url, scanned: res.scanned });
+      renderReport(report);
+      showResult('ok', '已填 ' + report.counts.filled + ' 项', report.counts.missing || report.counts.unmatched
+        ? '待填 ' + report.counts.missing + ' 项、未匹配 ' + report.counts.unmatched + ' 项，见下方报告。'
+        : '简历里的字段这一页都填上了。');
+
+      // 没当场补的待填项挂到 pendingItems，跨页面/跨会话携带
+      if (report.missing.length) {
+        var host = hostOf(tab.url);
+        await window.JC.addPendingItems(
+          report.missing.map(function (item) {
+            return { key: item.key, label: item.label, host: host, source: 'fill-report' };
+          }),
+          { host: host, url: tab.url }
+        );
+        await refreshPending();
       }
     } catch (e) {
       showResult('error', '出错了', String((e && e.message) || e));
@@ -216,15 +579,18 @@
     }
   }
 
-  /* -------------------------------------------------------------- 学习流 */
-
-  function hostOf(url) {
+  async function copyReport() {
+    if (!lastReport) return;
+    var text = window.JC.reportToText(lastReport, { url: activeUrl });
     try {
-      return new URL(url).host;
+      await navigator.clipboard.writeText(text);
+      els.copyStatus.textContent = '已复制';
     } catch (e) {
-      return '';
+      els.copyStatus.textContent = '复制失败，请手动选中';
     }
   }
+
+  /* -------------------------------------------------------------- 学习流 */
 
   function attrSample(entry) {
     var attrs = entry.attrs || {};
@@ -363,6 +729,7 @@
   async function boot() {
     resume = await window.JC.getResume();
     renderProfile();
+    await refreshPending();
     window.JC.onResumeChanged(function (next) {
       resume = next;
       renderProfile();
@@ -374,6 +741,17 @@
   els.learnSave.addEventListener('click', saveLearnedRules);
   els.learnClose.addEventListener('click', function () {
     els.learnPanel.hidden = true;
+  });
+  els.copyReport.addEventListener('click', copyReport);
+  els.pendingToggle.addEventListener('click', function () {
+    var hidden = els.pendingList.hidden;
+    els.pendingList.hidden = !hidden;
+    els.pendingToggle.textContent = hidden ? '收起' : '展开';
+  });
+  els.pendingClear.addEventListener('click', function () {
+    window.JC.clearPendingItems().then(function () {
+      refreshPending();
+    });
   });
   els.refreshBtn.addEventListener('click', boot);
   els.optionsBtn.addEventListener('click', function () {

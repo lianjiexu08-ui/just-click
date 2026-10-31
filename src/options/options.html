@@ -11,29 +11,45 @@
         <span class="logo">JC</span>
         <div>
           <h1>我的简历</h1>
-          <p class="tagline">这些字段会在一键填充时写进网页表单，只保存在本机 chrome.storage.local。</p>
+          <p class="tagline">照着模板填一次，之后一键填充任何 ATS 表单。数据只保存在本机 chrome.storage.local。</p>
         </div>
       </div>
     </header>
 
     <main class="main">
-      <section class="card">
-        <h2>基本信息</h2>
-        <p class="section-hint">姓名建议同时填写全名与「姓 / 名」，以适配不同 ATS 的字段拆分。</p>
-        <form id="resume-form" class="grid" autocomplete="off"></form>
+      <section class="card toolbar">
+        <div class="toolbar-row">
+          <button id="export-btn" class="ghost" type="button">导出 JSON</button>
+          <button id="import-btn" class="ghost" type="button">导入 JSON</button>
+          <button id="clear-btn" class="danger" type="button">清空</button>
+          <span id="save-hint" class="save-hint" role="status"></span>
+        </div>
+        <p id="status" class="status" role="status">读取中…</p>
+        <pre id="errors" class="errors" hidden></pre>
+        <input id="import-input" type="file" accept="application/json,.json" hidden />
       </section>
 
-      <section class="card">
-        <h2>自定义字段</h2>
-        <p class="section-hint">
-          内置字段不够用时在这里加，例如「期望薪资 / expected_salary」「到岗时间 / available_date」。
-          key 由 label 自动生成，也可以手动改；纯中文 label 会得到 custom_field_1 这样的兜底 key。
-          自定义字段不会写进内置字典，需要到下方「映射规则」或用 popup 的「从当前页学习」告诉插件怎么识别。
-        </p>
-        <div id="custom-fields" class="custom-list"></div>
-        <div class="actions">
-          <button id="add-custom-btn" class="ghost" type="button">+ 添加自定义字段</button>
+      <section class="card summary">
+        <div class="summary-head">
+          <h2>简历完整度</h2>
+          <strong id="completeness-total">0 / 0</strong>
         </div>
+        <div class="bar"><i id="completeness-bar"></i></div>
+        <p class="section-hint">每一项失焦即保存，没有「保存」按钮；姓名全名留空时会自动用「姓 + 名」拼接。</p>
+      </section>
+
+      <div id="template"></div>
+
+      <section class="card">
+        <h2>待填清单</h2>
+        <p class="section-hint">
+          填充时「表单认出来了、但简历里没值」的项会留在这里，跨页面、跨会话都在；补上或忽略后自动消失。
+        </p>
+        <div id="pending-list" class="pending-list"></div>
+        <div class="actions">
+          <button id="pending-refresh" class="ghost" type="button">刷新清单</button>
+        </div>
+        <p id="pending-status" class="status" role="status"></p>
       </section>
 
       <section class="card">
@@ -49,25 +65,14 @@
         </div>
         <p id="rules-status" class="status" role="status"></p>
       </section>
-
-      <section class="card">
-        <h2>数据管理</h2>
-        <p class="section-hint">导出的 JSON 可以备份或迁移到另一台设备；导入会覆盖当前内容（含自定义字段）。</p>
-        <div class="actions">
-          <button id="save-btn" class="primary" type="submit" form="resume-form">保存</button>
-          <button id="export-btn" class="ghost" type="button">导出 JSON</button>
-          <button id="import-btn" class="ghost" type="button">导入 JSON</button>
-          <button id="clear-btn" class="danger" type="button">清空</button>
-          <input id="import-input" type="file" accept="application/json,.json" hidden />
-        </div>
-        <p id="status" class="status" role="status">读取中…</p>
-        <pre id="errors" class="errors" hidden></pre>
-      </section>
     </main>
 
     <script src="../lib/resume-schema.js"></script>
     <script src="../lib/rules.js"></script>
     <script src="../lib/storage.js"></script>
+    <script src="../lib/template.js"></script>
+    <script src="../lib/supplement.js"></script>
+    <script src="../lib/pending.js"></script>
     <script src="options.js"></script>
   </body>
 </html>

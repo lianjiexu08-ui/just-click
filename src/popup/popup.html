@@ -17,12 +17,51 @@
     </header>
 
     <main class="main">
+      <section id="pending-banner" class="pending" hidden>
+        <div class="pending-head">
+          <span id="pending-title">你有 0 个待填项</span>
+          <span class="pending-actions">
+            <button id="pending-toggle" class="link" type="button">展开</button>
+            <button id="pending-clear" class="link" type="button" hidden>全部忽略</button>
+          </span>
+        </div>
+        <div id="pending-list" class="pending-list" hidden></div>
+      </section>
+
       <button id="fill-btn" class="primary" type="button">一键填充当前页面</button>
       <div class="actions-row">
         <button id="learn-btn" class="secondary" type="button">从当前页学习</button>
       </div>
 
       <div id="result" class="result" hidden></div>
+
+      <section id="report" class="report" hidden>
+        <div class="report-head">
+          <strong id="report-title">填充报告</strong>
+          <span id="report-time" class="report-time"></span>
+        </div>
+
+        <div class="report-block" id="block-filled">
+          <h3 id="filled-title">已填 0 项</h3>
+          <ul id="filled-list" class="report-list"></ul>
+        </div>
+
+        <div class="report-block" id="block-missing" hidden>
+          <h3 id="missing-title">待填 0 项</h3>
+          <p class="block-hint">在这里补值会立刻填进页面，只填值，不会提交表单。</p>
+          <div id="missing-list" class="missing-list"></div>
+        </div>
+
+        <details class="report-block collapse" id="block-unmatched" hidden>
+          <summary id="unmatched-title">未匹配 0 项（简历有值、页面没有对应输入框）</summary>
+          <ul id="unmatched-list" class="report-list"></ul>
+        </details>
+
+        <div class="report-actions">
+          <button id="copy-report" class="ghost small" type="button">复制报告</button>
+          <span id="copy-status" class="report-time"></span>
+        </div>
+      </section>
 
       <section id="learn-panel" class="learn" hidden>
         <div class="learn-head">
@@ -69,6 +108,10 @@
     <script src="../lib/rules.js"></script>
     <script src="../lib/storage.js"></script>
     <script src="../lib/learner.js"></script>
+    <script src="../lib/template.js"></script>
+    <script src="../lib/report.js"></script>
+    <script src="../lib/supplement.js"></script>
+    <script src="../lib/pending.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

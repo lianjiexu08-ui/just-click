@@ -280,6 +280,7 @@
 
     var filledLabels = [];
     var filledKeys = [];
+    var filledItems = [];
     var ruleHits = [];
     var failures = [];
 
@@ -298,6 +299,7 @@
         }
         highlight(el);
         filledLabels.push(a.label);
+        filledItems.push({ key: a.key, label: a.label, value: a.value });
         if (filledKeys.indexOf(a.key) === -1) filledKeys.push(a.key);
         if (a.ruleId && ruleHits.indexOf(a.ruleId) === -1) ruleHits.push(a.ruleId);
       } catch (e) {
@@ -307,6 +309,12 @@
 
     var missing = plan.missing.map(function (m) { return m.label; });
     var notFound = plan.notFound.map(function (m) { return m.label; });
+
+    // 迭代 3：报告三区块直接用这三个带 key 的结构，popup 不再靠 label 反查
+    var missingItems = plan.missing.map(function (m) { return { key: m.key, label: m.label }; });
+    var unmatchedItems = plan.notFound.map(function (m) {
+      return { key: m.key, label: m.label, value: valueMap[m.key] || '' };
+    });
 
     var summary = filledLabels.length
       ? '已填 ' + filledLabels.length + ' 项：' + filledLabels.join('、')
@@ -323,13 +331,77 @@
       filled: filledLabels.length,
       filledLabels: filledLabels,
       filledKeys: filledKeys,
+      filledItems: filledItems,
       missing: missing,
+      missingItems: missingItems,
       notFound: notFound,
+      unmatchedItems: unmatchedItems,
       failures: failures,
       scanned: collected.descriptors.length,
       matched: plan.assignments.length + plan.missing.length,
       ruleHits: ruleHits
     };
+  }
+
+  /* ---------------------------------------------------------- 增量补填（迭代 3） */
+
+  /**
+   * 只填一个输入框：报告里「待填」那行点了「补填」走这里。
+   * 刻意只调 setNativeValue / setSelectValue —— 不点按钮、不调用表单的提交方法，
+   * 页面上有没有「提交」按钮都与本函数无关。
+   */
+  function runFillOne(message) {
+    var key = message && typeof message.key === 'string' ? message.key : '';
+    var value = message && typeof message.value === 'string' ? message.value : '';
+    if (!key) return { ok: false, error: '缺少字段 key', filled: 0, submitted: false };
+    if (!value) return { ok: false, error: '补填的值是空的', filled: 0, submitted: false };
+
+    var el = null;
+    if (message.selector) {
+      try {
+        el = document.querySelector(message.selector);
+      } catch (e) {
+        el = null;
+      }
+    }
+
+    if (!el) {
+      if (!window.JC || typeof window.JC.buildFillPlan !== 'function') {
+        return { ok: false, error: '识别引擎未加载，请刷新页面后重试', filled: 0, submitted: false };
+      }
+      var collected = collectFillables();
+      var valueMap = {};
+      valueMap[key] = value;
+      var labels = {};
+      if (message.label) labels[key] = message.label;
+      var plan = window.JC.buildFillPlan(collected.descriptors, valueMap, {
+        minConfidence: 0.5,
+        fieldKeys: [key],
+        fieldLabels: labels,
+        rules: Array.isArray(message.rules) ? message.rules : [],
+        url: location.href
+      });
+      if (plan.assignments.length) {
+        el = collected.fillables[plan.assignments[0].index];
+      }
+    }
+
+    if (!el) return { ok: false, error: '页面上找不到这个字段', filled: 0, submitted: false };
+
+    try {
+      if (el.tagName === 'SELECT') {
+        if (!setSelectValue(el, value)) {
+          return { ok: false, error: '下拉框里没有这个选项', filled: 0, submitted: false };
+        }
+      } else {
+        setNativeValue(el, value);
+      }
+      highlight(el);
+      showToast('已补填 1 项：' + (message.label || key), '只填了值，没有提交表单。');
+      return { ok: true, filled: 1, key: key, value: value, submitted: false };
+    } catch (e) {
+      return { ok: false, error: String((e && e.message) || e), filled: 0, submitted: false };
+    }
   }
 
   /* -------------------------------------------------------------- 消息 */
@@ -356,6 +428,15 @@
         });
       } catch (e) {
         sendResponse({ ok: false, error: String((e && e.message) || e), url: location.href, entries: [] });
+      }
+      return undefined;
+    }
+
+    if (message.type === 'JC_FILL_ONE') {
+      try {
+        sendResponse(runFillOne(message));
+      } catch (e) {
+        sendResponse({ ok: false, error: String((e && e.message) || e), filled: 0, submitted: false });
       }
       return undefined;
     }

@@ -1,57 +1,54 @@
 /**
- * JustClick — options（简历编辑 + 自定义字段 + 映射规则 + JSON 导入导出）
+ * JustClick — options（迭代 3：简历模板重构）
  *
- * 内置字段由 resume-schema 的 FORM_FIELDS 驱动；自定义字段与映射规则是
- * 迭代 2 的用户数据，独立于内置字典，避免把一次性配置写死进代码。
+ * 页面结构：工具条（导出/导入/清空）→ 完整度 → 三组模板 → 待填清单 → 映射规则。
+ * 交互原则：每一项失焦即保存（防抖 400ms，可注入计时器，逻辑在 lib/template.js），
+ * 没有「保存」按钮；内置字段不可删只能清空，自定义项可删。
  */
 (function () {
   'use strict';
 
   var els = {
-    form: document.getElementById('resume-form'),
-    customList: document.getElementById('custom-fields'),
-    addCustomBtn: document.getElementById('add-custom-btn'),
-    rulesList: document.getElementById('rules-list'),
-    addRuleBtn: document.getElementById('add-rule-btn'),
-    reloadRulesBtn: document.getElementById('reload-rules-btn'),
-    rulesStatus: document.getElementById('rules-status'),
-    saveBtn: document.getElementById('save-btn'),
+    template: document.getElementById('template'),
+    completenessTotal: document.getElementById('completeness-total'),
+    completenessBar: document.getElementById('completeness-bar'),
     exportBtn: document.getElementById('export-btn'),
     importBtn: document.getElementById('import-btn'),
     importInput: document.getElementById('import-input'),
     clearBtn: document.getElementById('clear-btn'),
+    saveHint: document.getElementById('save-hint'),
     status: document.getElementById('status'),
-    errors: document.getElementById('errors')
+    errors: document.getElementById('errors'),
+    pendingList: document.getElementById('pending-list'),
+    pendingRefresh: document.getElementById('pending-refresh'),
+    pendingStatus: document.getElementById('pending-status'),
+    rulesList: document.getElementById('rules-list'),
+    addRuleBtn: document.getElementById('add-rule-btn'),
+    reloadRulesBtn: document.getElementById('reload-rules-btn'),
+    rulesStatus: document.getElementById('rules-status')
   };
 
-  var dirty = false;
+  var model = null;
+  var groups = [];
   var rulesState = [];
 
-  function getPath(obj, path) {
-    return path.split('.').reduce(function (acc, part) {
-      return acc && typeof acc === 'object' ? acc[part] : '';
-    }, obj);
-  }
-
-  function setPath(obj, path, value) {
-    var parts = path.split('.');
-    var node = obj;
-    for (var i = 0; i < parts.length - 1; i++) {
-      if (typeof node[parts[i]] !== 'object' || node[parts[i]] === null) node[parts[i]] = {};
-      node = node[parts[i]];
+  var saver = window.JC.createDebouncedSaver({
+    delay: window.JC.SAVE_DELAY,
+    save: function () {
+      return persist();
     }
-    node[parts[parts.length - 1]] = value;
-    return obj;
-  }
+  });
 
-  function markDirty() {
-    dirty = true;
-    setStatus('有未保存的修改', 'warn');
-  }
+  /* ---------------------------------------------------------------- 提示 */
 
   function setStatus(text, kind) {
     els.status.textContent = text;
     els.status.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function setPendingStatus(text, kind) {
+    els.pendingStatus.textContent = text;
+    els.pendingStatus.className = 'status' + (kind ? ' ' + kind : '');
   }
 
   function setRulesStatus(text, kind) {
@@ -70,151 +67,390 @@
     els.errors.textContent = list.join('\n');
   }
 
-  /* ------------------------------------------------------------ 内置表单 */
+  /* -------------------------------------------------------------- 数据层 */
 
-  function buildForm() {
-    els.form.innerHTML = '';
-    window.JC.FORM_FIELDS.forEach(function (field) {
-      var wrap = document.createElement('div');
-      wrap.className = 'field' + (field.multiline ? ' wide' : '');
-
-      var label = document.createElement('label');
-      label.setAttribute('for', 'f-' + field.path);
-      label.textContent = field.label;
-      wrap.appendChild(label);
-
-      var input = document.createElement(field.multiline ? 'textarea' : 'input');
-      input.id = 'f-' + field.path;
-      input.dataset.path = field.path;
-      if (field.multiline) {
-        input.rows = 5;
-        input.placeholder = field.placeholder || '';
+  /** 把一行输入写回 model（不做 trim，避免打字过程中光标乱跳） */
+  function setValue(target, key, raw) {
+    if (key === 'summary' || key === 'experience') {
+      target.summary = raw;
+      target.experience = raw;
+      return;
+    }
+    if (key === 'fullName') {
+      // 全名特殊：等于「姓 + 名」自动拼接结果时不留值（保持自动），
+      // 只有用户真的写了别的内容（或手动清空）才记成手动并冻结自动拼接
+      var trimmed = typeof raw === 'string' ? raw.trim() : '';
+      var composed = window.JC.composeFullName(target.basics.firstName, target.basics.lastName);
+      if (trimmed && trimmed !== composed) {
+        target.basics.fullName = raw;
+        target.fullNameManual = true;
+      } else if (!trimmed && composed) {
+        target.basics.fullName = '';
+        target.fullNameManual = true;
       } else {
-        input.type = field.type || 'text';
-        input.placeholder = field.placeholder || '';
-        input.autocomplete = 'off';
+        target.basics.fullName = '';
+        target.fullNameManual = false;
       }
-      input.addEventListener('input', markDirty);
-      wrap.appendChild(input);
-      els.form.appendChild(wrap);
+      return;
+    }
+    if (window.JC.isBuiltinFieldKey(key)) {
+      target.basics[key] = raw;
+      return;
+    }
+    for (var i = 0; i < target.customFields.length; i++) {
+      if (target.customFields[i].key === key) {
+        target.customFields[i].value = raw;
+        return;
+      }
+    }
+  }
+
+  function currentValue(key) {
+    if (key === 'summary' || key === 'experience') return model.summary || '';
+    if (window.JC.isBuiltinFieldKey(key)) return model.basics[key] || '';
+    for (var i = 0; i < model.customFields.length; i++) {
+      if (model.customFields[i].key === key) return model.customFields[i].value || '';
+    }
+    return '';
+  }
+
+  function persist() {
+    return window.JC.saveResume(model).then(function (result) {
+      if (!result.ok) {
+        showErrors(result.errors);
+        setStatus('保存失败，请检查提示项', 'warn');
+        return result;
+      }
+      model = result.resume;
+      showErrors(result.warnings && result.warnings.length ? result.warnings : null, 'warn');
+      var d = new Date(result.resume.updatedAt);
+      els.saveHint.textContent = '已保存 ✓ ' + (isNaN(d.getTime()) ? '' : d.toLocaleTimeString('zh-CN'));
+      setStatus('本地已保存（' + model.customFields.length + ' 个自定义项）');
+      updateCompleteness();
+      return result;
+    }).catch(function (error) {
+      setStatus('保存失败：' + ((error && error.message) || error), 'warn');
+      return { ok: false };
     });
   }
 
-  /* ---------------------------------------------------------- 自定义字段 */
+  /* ---------------------------------------------------------- 完整度 */
 
-  function customKeyPool() {
-    var keys = window.JC.FIELD_KEYS.slice();
-    var inputs = els.customList.querySelectorAll('[data-custom-key]');
-    for (var i = 0; i < inputs.length; i++) {
-      var value = inputs[i].value.trim();
-      if (value && keys.indexOf(value) === -1) keys.push(value);
+  function updateCompleteness() {
+    groups = window.JC.templatesFor(model, { seed: false });
+    var stats = window.JC.computeCompleteness(groups, model);
+    els.completenessTotal.textContent = stats.filled + ' / ' + stats.total;
+    els.completenessBar.style.width = stats.percent + '%';
+
+    for (var i = 0; i < stats.groups.length; i++) {
+      var detail = stats.groups[i];
+      var count = document.querySelector('[data-group-count="' + detail.id + '"]');
+      if (count) count.textContent = '已填 ' + detail.filled + ' / ' + detail.total;
+      var bar = document.querySelector('[data-group-bar="' + detail.id + '"] i');
+      if (bar) bar.style.width = detail.percent + '%';
     }
-    return keys;
+    return stats;
   }
 
-  /** label 能 slug 就用 slug，纯中文/纯符号/数字开头则退到 custom_field_N */
-  function suggestKeyForLabel(label) {
-    var slug = window.JC.slugifyKey(label);
-    if (slug) {
-      slug = slug.slice(0, 40).replace(/_+$/g, '');
-      if (window.JC.CUSTOM_KEY_RE.test(slug)) return slug;
-    }
-    return window.JC.nextCustomKey(customKeyPool());
+  /* ------------------------------------------------------------ 模板渲染 */
+
+  function composedNamePreview() {
+    var composed = window.JC.composeFullName(model.basics.firstName, model.basics.lastName);
+    if (!composed) return '';
+    if (model.fullNameManual === true) return '';
+    return '留空自动拼接：' + composed;
   }
 
-  function customInput(placeholder, attrName) {
-    var input = document.createElement('input');
-    input.type = 'text';
-    input.placeholder = placeholder;
+  function fieldInput(row) {
+    var input = document.createElement(row.multiline ? 'textarea' : 'input');
+    input.id = 'f-' + row.key;
+    input.setAttribute('data-field-key', row.key);
+    input.setAttribute('data-group', row.group);
     input.autocomplete = 'off';
-    input.setAttribute(attrName, '');
+    if (row.multiline) {
+      input.rows = 4;
+      input.placeholder = row.placeholder || '';
+    } else {
+      input.type = row.type || 'text';
+      input.placeholder = row.placeholder || '';
+    }
+    input.value = row.value || '';
+    if (row.autoCompose) {
+      var preview = composedNamePreview();
+      if (preview) input.placeholder = preview;
+    }
+
+    input.addEventListener('input', function () {
+      setValue(model, row.key, input.value);
+      saver.push(model);
+      updateCompleteness();
+    });
+    input.addEventListener('blur', function () {
+      setValue(model, row.key, input.value);
+      saver.push(model);
+      saver.flush();
+    });
     return input;
   }
 
-  function createCustomRow(field) {
-    var data = field || {};
-    var row = document.createElement('div');
-    row.className = 'custom-row';
-    row.setAttribute('data-custom-row', '');
+  function createRow(row) {
+    var wrap = document.createElement('div');
+    wrap.className = 'tpl-row' + (row.multiline ? ' wide' : '') + (row.kind === 'custom' ? ' custom' : '');
+    wrap.setAttribute('data-tpl-row', '');
+    wrap.setAttribute('data-key', row.key);
 
-    var labelInput = customInput('标签，如 期望薪资', 'data-custom-label');
-    var keyInput = customInput('expected_salary', 'data-custom-key');
-    var valueInput = customInput('值，如 30k / 2026-03', 'data-custom-value');
-    keyInput.className = 'key-input';
+    var label = document.createElement('label');
+    label.className = 'tpl-label';
+    label.setAttribute('for', 'f-' + row.key);
+    label.textContent = row.label;
+    wrap.appendChild(label);
 
-    labelInput.value = data.label || '';
-    keyInput.value = data.key || '';
-    valueInput.value = data.value || '';
-    // 已有 key 视为用户手动确定过，后续改 label 不再覆盖
-    keyInput.dataset.auto = data.key ? '0' : '1';
+    var body = document.createElement('div');
+    body.className = 'tpl-body';
+    body.appendChild(fieldInput(row));
+    wrap.appendChild(body);
 
-    labelInput.addEventListener('input', function () {
-      if (keyInput.dataset.auto !== '0') keyInput.value = suggestKeyForLabel(labelInput.value);
-      markDirty();
-    });
-    keyInput.addEventListener('input', function () {
-      keyInput.dataset.auto = '0';
-      markDirty();
-    });
-    valueInput.addEventListener('input', markDirty);
+    if (row.kind === 'custom') {
+      var key = document.createElement('code');
+      key.className = 'tpl-key';
+      key.textContent = row.key;
+      key.title = '存储用 key（自定义项）';
+      wrap.appendChild(key);
 
-    var remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'danger small';
-    remove.textContent = '删除';
-    remove.addEventListener('click', function () {
-      row.remove();
-      markDirty();
-    });
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'danger small';
+      remove.textContent = '删除';
+      remove.addEventListener('click', function () {
+        var result = window.JC.removeCustomField(model, row.key);
+        if (!result.ok) {
+          showErrors([result.error], 'warn');
+          return;
+        }
+        model = result.resume;
+        persist().then(function () {
+          renderGroups();
+          renderPending();
+        });
+      });
+      wrap.appendChild(remove);
+    }
 
-    row.appendChild(labelInput);
-    row.appendChild(keyInput);
-    row.appendChild(valueInput);
-    row.appendChild(remove);
-    return row;
+    return wrap;
   }
 
-  function renderCustomFields(fields) {
-    els.customList.innerHTML = '';
-    var list = Array.isArray(fields) ? fields : [];
-    if (!list.length) {
-      var empty = document.createElement('p');
-      empty.className = 'empty';
-      empty.textContent = '还没有自定义字段。添加后会出现在 popup 的学习下拉与规则目标里。';
-      els.customList.appendChild(empty);
-      return;
+  function startDraft(groupId) {
+    var rowsHost = document.querySelector('[data-group-rows="' + groupId + '"]');
+    if (!rowsHost || rowsHost.querySelector('[data-draft]')) return;
+
+    var draft = document.createElement('div');
+    draft.className = 'tpl-row draft';
+    draft.setAttribute('data-draft', '');
+
+    var labelInput = document.createElement('input');
+    labelInput.type = 'text';
+    labelInput.placeholder = '新字段名，如 期望薪资 / portfolio';
+    labelInput.autocomplete = 'off';
+    labelInput.className = 'draft-label';
+
+    var hint = document.createElement('span');
+    hint.className = 'draft-hint';
+    hint.textContent = '写名字后回车或点「添加」，key 会自动生成（同一个名字不会重复创建）';
+
+    var add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'primary small';
+    add.textContent = '添加';
+
+    var cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'ghost small';
+    cancel.textContent = '取消';
+
+    function commit() {
+      var result = window.JC.addCustomField(model, labelInput.value, groupId);
+      if (!result.ok) {
+        hint.textContent = result.error || '添加失败';
+        hint.className = 'draft-hint warn';
+        return;
+      }
+      model = result.resume;
+      persist().then(function () {
+        renderGroups();
+        var input = document.querySelector('[data-field-key="' + result.field.key + '"]');
+        if (input) input.focus();
+      });
     }
-    for (var i = 0; i < list.length; i++) els.customList.appendChild(createCustomRow(list[i]));
+
+    add.addEventListener('click', commit);
+    cancel.addEventListener('click', function () {
+      draft.remove();
+    });
+    labelInput.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        commit();
+      }
+    });
+
+    draft.appendChild(labelInput);
+    draft.appendChild(hint);
+    draft.appendChild(add);
+    draft.appendChild(cancel);
+    rowsHost.appendChild(draft);
+    labelInput.focus();
   }
 
-  function readCustomFields() {
-    var rows = els.customList.querySelectorAll('[data-custom-row]');
-    var out = [];
-    var used = window.JC.FIELD_KEYS.slice();
-    for (var i = 0; i < rows.length; i++) {
-      var labelInput = rows[i].querySelector('[data-custom-label]');
-      var keyInput = rows[i].querySelector('[data-custom-key]');
-      var valueInput = rows[i].querySelector('[data-custom-value]');
-      if (!labelInput || !keyInput || !valueInput) continue;
+  function renderGroups() {
+    els.template.innerHTML = '';
+    for (var g = 0; g < groups.length; g++) {
+      var group = groups[g];
 
-      var label = labelInput.value.trim();
-      var key = keyInput.value.trim();
-      var value = valueInput.value;
-      if (!label && !key && !value) continue;
-      if (!key && label) key = suggestKeyForLabel(label);
-      if (key && used.indexOf(key) === -1) used.push(key);
-      out.push({ key: key, label: label, value: value });
+      var section = document.createElement('section');
+      section.className = 'card group';
+      section.setAttribute('data-group', group.id);
+
+      var head = document.createElement('div');
+      head.className = 'group-head';
+      var title = document.createElement('h2');
+      title.textContent = group.title;
+      head.appendChild(title);
+      var count = document.createElement('span');
+      count.className = 'group-count';
+      count.setAttribute('data-group-count', group.id);
+      count.textContent = '已填 0 / 0';
+      head.appendChild(count);
+      section.appendChild(head);
+
+      var bar = document.createElement('div');
+      bar.className = 'bar';
+      bar.setAttribute('data-group-bar', group.id);
+      bar.appendChild(document.createElement('i'));
+      section.appendChild(bar);
+
+      if (group.hint) {
+        var hint = document.createElement('p');
+        hint.className = 'section-hint';
+        hint.textContent = group.hint;
+        section.appendChild(hint);
+      }
+
+      var rowsHost = document.createElement('div');
+      rowsHost.className = 'tpl-rows';
+      rowsHost.setAttribute('data-group-rows', group.id);
+      for (var r = 0; r < group.rows.length; r++) rowsHost.appendChild(createRow(group.rows[r]));
+      section.appendChild(rowsHost);
+
+      var actions = document.createElement('div');
+      actions.className = 'actions';
+      var addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'ghost small';
+      addBtn.textContent = '+ 添加自定义项';
+      addBtn.addEventListener('click', function (groupId) {
+        return function () {
+          startDraft(groupId);
+        };
+      }(group.id));
+      actions.appendChild(addBtn);
+      section.appendChild(actions);
+
+      els.template.appendChild(section);
     }
-    return out;
+    updateCompleteness();
+  }
+
+  /* ------------------------------------------------------------ 待填清单 */
+
+  function focusField(key, label) {
+    var input = document.querySelector('[data-field-key="' + key + '"]');
+    if (input) {
+      input.focus();
+      input.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      return true;
+    }
+    // 模板里还没有这个字段：作为自定义项补进第三组
+    var added = window.JC.addCustomField(model, label || key, 'extra');
+    if (!added.ok) return false;
+    model = added.resume;
+    return persist().then(function () {
+      renderGroups();
+      var next = document.querySelector('[data-field-key="' + added.field.key + '"]');
+      if (next) {
+        next.focus();
+        next.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+    });
+  }
+
+  async function renderPending() {
+    try {
+      var bag = await window.JC.getPendingItems();
+      var items = bag.items || [];
+      els.pendingList.innerHTML = '';
+
+      if (!items.length) {
+        var empty = document.createElement('p');
+        empty.className = 'empty';
+        empty.textContent = '没有待填项。填充时表单认出来但简历没值的字段会出现在这里。';
+        els.pendingList.appendChild(empty);
+        setPendingStatus('');
+        return;
+      }
+
+      items.forEach(function (item) {
+        var row = document.createElement('div');
+        row.className = 'pending-row';
+        row.setAttribute('data-pending-key', item.key);
+
+        var label = document.createElement('span');
+        label.className = 'pending-label';
+        label.textContent = item.label;
+        row.appendChild(label);
+
+        var meta = document.createElement('span');
+        meta.className = 'pending-meta';
+        var when = item.at ? new Date(item.at) : null;
+        meta.textContent =
+          (item.host || '未知站点') +
+          (when && !isNaN(when.getTime()) ? ' · ' + when.toLocaleString('zh-CN') : '');
+        row.appendChild(meta);
+
+        var go = document.createElement('button');
+        go.type = 'button';
+        go.className = 'ghost small';
+        go.textContent = '去填写';
+        go.addEventListener('click', function () {
+          focusField(item.key, item.label);
+        });
+        row.appendChild(go);
+
+        var ignore = document.createElement('button');
+        ignore.type = 'button';
+        ignore.className = 'link small';
+        ignore.textContent = '忽略';
+        ignore.addEventListener('click', function () {
+          window.JC.removePendingItem(item.key).then(function () {
+            renderPending();
+          });
+        });
+        row.appendChild(ignore);
+
+        els.pendingList.appendChild(row);
+      });
+
+      setPendingStatus('共 ' + items.length + ' 个待填项', 'ok');
+    } catch (error) {
+      setPendingStatus('读取待填清单失败：' + ((error && error.message) || error), 'warn');
+    }
   }
 
   /* -------------------------------------------------------------- 规则表 */
 
   function currentFields() {
-    var draft = readForm();
-    var keys = window.JC.getFieldKeys(draft);
+    var keys = window.JC.getFieldKeys(model);
     return keys.map(function (key) {
-      return { key: key, label: window.JC.labelFor(draft, key) };
+      return { key: key, label: window.JC.labelFor(model, key) };
     });
   }
 
@@ -428,84 +664,10 @@
     setRulesStatus('已新增规则：name 包含 ' + target + ' → ' + target, 'ok');
   }
 
-  /* -------------------------------------------------------------- 表单读写 */
-
-  function fillForm(resume) {
-    var inputs = els.form.querySelectorAll('[data-path]');
-    for (var i = 0; i < inputs.length; i++) {
-      var path = inputs[i].dataset.path;
-      var value = path === 'summary' ? window.JC.resolveValue(resume, 'summary') : getPath(resume, path);
-      inputs[i].value = typeof value === 'string' ? value : '';
-    }
-    renderCustomFields(resume.customFields || []);
-    dirty = false;
-  }
-
-  function readForm() {
-    var resume = window.JC.createEmptyResume();
-    var inputs = els.form.querySelectorAll('[data-path]');
-    for (var i = 0; i < inputs.length; i++) {
-      var path = inputs[i].dataset.path;
-      var raw = inputs[i].value;
-      if (path === 'summary') {
-        // 经历摘要同时写进 summary 与 experience，保证导入导出与识别都拿得到
-        resume.summary = raw;
-        resume.experience = raw;
-      } else {
-        setPath(resume, path, raw);
-      }
-    }
-    resume.customFields = readCustomFields();
-    return resume;
-  }
-
-  async function load() {
-    try {
-      var resume = await window.JC.getResume();
-      fillForm(resume);
-      if (resume.updatedAt) {
-        var d = new Date(resume.updatedAt);
-        setStatus('已载入本地简历（更新于 ' + (isNaN(d.getTime()) ? resume.updatedAt : d.toLocaleString('zh-CN')) + '）');
-      } else {
-        setStatus('还没有保存过简历，填写后点「保存」');
-      }
-      showErrors(null);
-    } catch (e) {
-      setStatus('读取失败：' + ((e && e.message) || e), 'warn');
-    }
-    await loadRules();
-  }
-
-  async function save() {
-    var resume = readForm();
-    els.saveBtn.disabled = true;
-    try {
-      var result = await window.JC.saveResume(resume);
-      if (!result.ok) {
-        showErrors(result.errors);
-        setStatus('保存失败，请检查标红项', 'warn');
-        return;
-      }
-      fillForm(result.resume);
-      if (result.warnings && result.warnings.length) {
-        showErrors(result.warnings, 'warn');
-        setStatus('已保存，但有 ' + result.warnings.length + ' 项提示', 'warn');
-      } else {
-        showErrors(null);
-        var d = new Date(result.resume.updatedAt);
-        setStatus('已保存 · ' + d.toLocaleTimeString('zh-CN'), 'ok');
-      }
-      // 新 key 可能刚加进来，规则目标下拉需要刷新
-      await loadRules();
-    } catch (e) {
-      setStatus('保存失败：' + ((e && e.message) || e), 'warn');
-    } finally {
-      els.saveBtn.disabled = false;
-    }
-  }
+  /* -------------------------------------------------------------- 数据管理 */
 
   function exportJson() {
-    var text = window.JC.exportJSON(readForm());
+    var text = window.JC.exportJSON(model);
     var blob = new Blob([text], { type: 'application/json' });
     var url = URL.createObjectURL(blob);
     var a = document.createElement('a');
@@ -517,7 +679,7 @@
     setTimeout(function () {
       URL.revokeObjectURL(url);
     }, 1000);
-    setStatus('已导出 justclick-resume.json（含自定义字段）', 'ok');
+    setStatus('已导出 justclick-resume.json（含自定义字段与分组）', 'ok');
   }
 
   function importJson(file) {
@@ -530,17 +692,24 @@
         setStatus('导入失败：JSON 结构不合法', 'warn');
         return;
       }
-      fillForm(parsed.resume);
+      var ok = window.confirm('导入会覆盖当前模板内容（含自定义字段），确定继续？');
+      if (!ok) {
+        setStatus('已取消导入');
+        return;
+      }
       var saved = await window.JC.saveResume(parsed.resume);
       if (!saved.ok) {
         showErrors(saved.errors);
-        setStatus('导入内容已填入表单，但保存失败', 'warn');
+        setStatus('导入内容校验通过，但保存失败', 'warn');
         return;
       }
+      model = saved.resume;
+      renderGroups();
+      renderPending();
+      await loadRules();
       var notices = (parsed.warnings || []).concat(saved.warnings || []);
       showErrors(notices, notices.length ? 'warn' : null);
       setStatus('已导入并保存', 'ok');
-      await loadRules();
     };
     reader.onerror = function () {
       setStatus('文件读取失败', 'warn');
@@ -551,23 +720,46 @@
   async function clearAll() {
     if (!window.confirm('确定清空本机保存的简历数据？此操作不可撤销。')) return;
     await window.JC.clearResume();
-    fillForm(window.JC.createEmptyResume());
+    var loaded = await window.JC.getResume();
+    var seeded = window.JC.seedTemplateResume(loaded, { force: true });
+    model = seeded.resume;
+    await persist();
+    renderGroups();
     showErrors(null);
     setStatus('已清空', 'ok');
   }
 
-  els.form.addEventListener('submit', function (e) {
-    e.preventDefault();
-    save();
-  });
-  els.addCustomBtn.addEventListener('click', function () {
-    var empty = els.customList.querySelector('.empty');
-    if (empty) empty.remove();
-    els.customList.appendChild(createCustomRow({}));
-    markDirty();
-  });
-  els.addRuleBtn.addEventListener('click', addRule);
-  els.reloadRulesBtn.addEventListener('click', loadRules);
+  /* ---------------------------------------------------------------- 启动 */
+
+  async function load() {
+    try {
+      var loaded = await window.JC.getResume();
+      var seeded = window.JC.seedTemplateResume(loaded);
+      model = seeded.resume;
+      if (seeded.changed) {
+        // 预置项只在第一次播种；播种后立刻落盘，避免每次刷新都重算
+        var saved = await window.JC.saveResume(model);
+        if (saved.ok) model = saved.resume;
+      }
+      renderGroups();
+      applyLoadedStatus();
+      showErrors(null);
+    } catch (e) {
+      setStatus('读取失败：' + ((e && e.message) || e), 'warn');
+    }
+    await loadRules();
+    await renderPending();
+  }
+
+  function applyLoadedStatus() {
+    if (model.updatedAt) {
+      var d = new Date(model.updatedAt);
+      setStatus('已载入本地简历（更新于 ' + (isNaN(d.getTime()) ? model.updatedAt : d.toLocaleString('zh-CN')) + '）');
+    } else {
+      setStatus('模板已就绪，开始填写即可（自动保存）');
+    }
+  }
+
   els.exportBtn.addEventListener('click', exportJson);
   els.importBtn.addEventListener('click', function () {
     els.importInput.click();
@@ -577,21 +769,13 @@
     els.importInput.value = '';
   });
   els.clearBtn.addEventListener('click', clearAll);
+  els.pendingRefresh.addEventListener('click', renderPending);
+  els.addRuleBtn.addEventListener('click', addRule);
+  els.reloadRulesBtn.addEventListener('click', loadRules);
 
-  document.addEventListener('keydown', function (e) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      save();
-    }
+  window.addEventListener('beforeunload', function () {
+    if (saver.isPending()) saver.flush();
   });
 
-  window.addEventListener('beforeunload', function (e) {
-    if (!dirty) return undefined;
-    e.preventDefault();
-    e.returnValue = '';
-    return '';
-  });
-
-  buildForm();
   load();
 })();

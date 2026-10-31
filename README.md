@@ -2,6 +2,29 @@
 
 一键求职填充 Chrome 插件（Manifest V3，零依赖）：填一次简历，在任意 ATS 表单上只点一下。
 
+## 迭代 3 新增（简历模板 + 填充报告 + 待填补充）
+
+用户手里是一份 PDF 简历时，他要的不是「解析 PDF」，而是三件事：照着模板录一次、每次填充知道填了什么没填什么、没填的当场补上。
+
+1. **三组简历模板**（options 重构）：「基本信息」（姓氏/名/全名/邮箱/电话/城市/详细地址）、「求职意向」（期望职位/期望薪资/到岗时间，预置可删）、「教育与其他」（学校/专业/学历/毕业年份/工作年限/经历摘要/作品集链接）。每项一行、**失焦即保存**（防抖 400ms，无保存按钮），带「已保存 ✓」微提示；每组一条完整度进度条 + 顶部总进度。
+2. **填充报告**（popup 重构）：填充后按三区块渲染 —— 「已填 N 项」（`label = 值`，超过 20 字截断可点开）、「待填 M 项」（每行内联输入框 + 「补填」按钮）、「未匹配 K 项」（折叠）。底部「复制报告」导出纯文本。
+3. **待填项持久化 + 内联补填**：没当场补的待填项存进 `jc.pending`（按 key 去重，带来源站点与时间），popup 顶部显示「你有 N 个待填项（上次来自 xxx.com）」，options 页也能看到同一份清单。补值 → 写回简历 → 只填那一个输入框 → 立刻从清单移除。
+
+**安全底线不变**：内联补填只写值，不点提交、不 `form.submit()`、不 `requestSubmit()`；`tests/supplement.test.js` 直接对 `content.js` 源码做静态断言。
+
+### 姓名拼接规则
+
+`fullName` 留空时自动拼接：中文按「姓 + 名」（张 + 三 = 张三，不留空格），拉丁字母按「名 姓」（San Zhang，保持迭代 1 行为）。用户手动改过（包括手动清空）后写入 `fullNameManual: true`，不再被自动覆盖。
+
+### 新增纯逻辑模块（都可单测，不碰 DOM）
+
+| 文件 | 职责 |
+| --- | --- |
+| `lib/template.js` | 三组模板定义、预置项播种（只播一次）、`templatesFor` 渲染模型、完整度计算、自定义项增删（key 确定性生成）、防抖保存器 |
+| `lib/report.js` | `buildReportFromPlan` → filled/missing/unmatched、20 字截断、`reportToText` 文本报告 |
+| `lib/supplement.js` | 补值写回简历模型（未知 key 自动建自定义字段）、增量填充指令 `JC_FILL_ONE`（`submit:false` 自检） |
+| `lib/pending.js` | `jc.pending` 的读取/去重/移除、横幅文案 |
+
 ## 迭代 2 新增（用户自定义 / 反过拟合）
 
 迭代 1 的字典 + 三家 ATS 精确规则是对已知表单的过拟合。迭代 2 让用户显式「教」插件：
@@ -32,9 +55,13 @@ src/
   lib/field-matcher.js   字段识别：用户规则 → ATS → 字典（UMD，纯函数）
   lib/learner.js         从当前页学习：扫描、选择器、生成规则（UMD，纯函数）
   lib/storage.js         chrome.storage 封装（jc.resume / jc.rules，schemaVersion 2）
-  options/               简历编辑 + 自定义字段 + 规则表
-  popup/                 一键填充 + 从当前页学习
-tests/                   node:test，71 条
+  lib/template.js        三组模板、完整度、自定义项增删、防抖保存器（UMD，纯函数）
+  lib/report.js          填充报告三区块 / 截断 / 文本导出（UMD，纯函数）
+  lib/supplement.js      内联补值写回 + JC_FILL_ONE 增量指令（submit:false）
+  lib/pending.js         jc.pending 待填项：去重、持久化、横幅文案
+  options/               简历模板（三组）+ 待填清单 + 规则表
+  popup/                 一键填充 + 填充报告 + 内联补填 + 从当前页学习
+tests/                   node:test，97 条
 scripts/build.mjs        零依赖构建：校验 manifest/html 引用 → 产出 dist/
 docs/                    验收对照与手动测试步骤
 ```
@@ -42,7 +69,7 @@ docs/                    验收对照与手动测试步骤
 ## 开发与验证
 
 ```bash
-npm test          # node --test tests/ —— 71 条
+npm test          # node --test tests/ —— 97 条
 npm run smoke     # 6 个识别场景
 npm run build     # 校验 + 产出 dist/
 ```
@@ -55,8 +82,10 @@ npm run build     # 校验 + 产出 dist/
 
 ## 使用
 
-1. 打开扩展的 options 页，填写基本信息；需要的话在「自定义字段」里加 `期望薪资 / expected_salary`。
-2. 在职位表单页打开 popup → 「一键填充当前页面」，命中字段会高亮 2 秒。
-3. 填错了：点「从当前页学习」→ 给该字段选正确的目标字段 → 保存。之后这条规则优先于 ATS 与字典，可在 options 页随时禁用或删除。
+1. 打开扩展的 options 页，按三组模板填一次（失焦即保存）；「求职意向」「教育与其他」里的预置项可以改名或删掉，「+ 添加自定义项」可以随时加，比如 `期望薪资`。
+2. 在职位表单页打开 popup → 「一键填充当前页面」，命中字段会高亮 2 秒，随后弹出**填充报告**：已填 / 待填 / 未匹配。
+3. 报告里「待填」那行可以直接补值 → 点「补填」：值写进简历，页面上的那个输入框立刻被填上（**不会提交表单**）。
+4. 没当场补的项会挂进待填清单，下次打开 popup 顶部提示「你有 N 个待填项（上次来自 xxx.com）」，options 页也能看到同一份清单。
+5. 识别错了：点「从当前页学习」→ 给该字段选正确的目标字段 → 保存。之后这条规则优先于 ATS 与字典，可在 options 页随时禁用或删除。
 
-数据只存在本机 `chrome.storage.local`，不上传任何服务器；填充永远不会点提交按钮。
+数据只存在本机 `chrome.storage.local`（`jc.resume` / `jc.rules` / `jc.pending`），不上传任何服务器；填充与补填都永远不会点提交按钮。

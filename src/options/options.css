@@ -326,10 +326,187 @@ button.small {
   color: #b45309;
 }
 
+/* ------------------------------------------------- 模板三组（迭代 3） */
+
+.card.toolbar {
+  display: grid;
+  gap: 6px;
+}
+
+.toolbar-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.save-hint {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #15803d;
+  min-height: 16px;
+}
+
+.summary-head,
+.group-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.summary-head strong {
+  font-size: 14px;
+  color: #2563eb;
+  font-variant-numeric: tabular-nums;
+}
+
+.group-count {
+  font-size: 12px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar {
+  margin: 8px 0 10px;
+  height: 6px;
+  border-radius: 99px;
+  background: #e2e8f0;
+  overflow: hidden;
+}
+
+.bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 99px;
+  background: linear-gradient(90deg, #2563eb, #60a5fa);
+  transition: width 0.25s ease;
+}
+
+.tpl-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.tpl-row {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.tpl-row .tpl-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #334155;
+  overflow-wrap: anywhere;
+}
+
+.tpl-row .tpl-body {
+  min-width: 0;
+}
+
+.tpl-row .tpl-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: #94a3b8;
+  background: #f1f5f9;
+  border-radius: 5px;
+  padding: 2px 5px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tpl-row.wide {
+  grid-template-columns: 150px minmax(0, 1fr);
+}
+
+.tpl-row.wide .tpl-body {
+  grid-column: 2 / -1;
+}
+
+.tpl-row.draft {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  padding: 10px;
+  border: 1px dashed #93c5fd;
+  border-radius: 9px;
+  background: #f8fbff;
+}
+
+.draft-hint {
+  font-size: 11.5px;
+  color: #64748b;
+}
+
+.draft-hint.warn {
+  color: #b45309;
+}
+
+/* --------------------------------------------------- 待填清单（迭代 3） */
+
+.pending-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pending-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.pending-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #0f172a;
+  min-width: 96px;
+}
+
+.pending-meta {
+  flex: 1 1 auto;
+  font-size: 11.5px;
+  color: #94a3b8;
+}
+
+button.ghost.small,
+button.primary.small,
+button.danger.small {
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+button.link.small {
+  padding: 5px 6px;
+  background: none;
+  border: none;
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+button.link.small:hover {
+  text-decoration: underline;
+}
+
 @media (max-width: 720px) {
   .custom-row,
-  .rule-grid {
+  .rule-grid,
+  .tpl-row,
+  .tpl-row.wide,
+  .tpl-row.draft {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tpl-row.wide .tpl-body {
+    grid-column: auto;
   }
 }
 
