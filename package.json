@@ -1,0 +1,15 @@
+{
+  "name": "justclick",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JustClick — 一键求职填充 Chrome 插件 (Manifest V3)",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/",
+    "build": "node scripts/build.mjs",
+    "verify": "npm run build && npm test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

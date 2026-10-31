@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "JustClick — 一键求职填充",
+  "version": "0.1.0",
+  "description": "只点一下，把姓名 / 邮箱 / 电话等常用求职字段填进任何 ATS 表单。MVP 支持 Greenhouse、Lever、Workday。",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "JustClick 一键填充"
+  },
+  "options_ui": {
+    "page": "options/options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["lib/resume-schema.js", "lib/field-matcher.js", "content/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/resume-schema.js", "lib/field-matcher.js"],
+      "matches": ["http://*/*", "https://*/*"]
+    }
+  ]
+}

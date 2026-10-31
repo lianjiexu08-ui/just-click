@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>JustClick</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <span class="logo">JC</span>
+        <div>
+          <h1>JustClick</h1>
+          <p class="tagline">只点一下，填完求职表单</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <button id="fill-btn" class="primary" type="button">一键填充当前页面</button>
+
+      <div id="result" class="result" hidden></div>
+
+      <section class="profile">
+        <div class="profile-head">
+          <span>简历完整度</span>
+          <strong id="completeness">0 / 11</strong>
+        </div>
+        <div class="bar"><i id="completeness-bar"></i></div>
+        <p id="profile-name" class="profile-name">尚未填写简历</p>
+        <div id="missing-chips" class="chips"></div>
+        <p id="updated-at" class="updated"></p>
+      </section>
+
+      <p class="hint">
+        支持 Greenhouse / Lever / Workday 等常见职位表单。已填字段会高亮 2 秒。
+      </p>
+    </main>
+
+    <footer class="foot">
+      <button id="options-btn" class="link" type="button">编辑简历</button>
+      <span class="dot">·</span>
+      <button id="refresh-btn" class="link" type="button">刷新</button>
+    </footer>
+
+    <script src="../lib/resume-schema.js"></script>
+    <script src="../lib/storage.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>JustClick — 我的简历</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <span class="logo">JC</span>
+        <div>
+          <h1>我的简历</h1>
+          <p class="tagline">这些字段会在一键填充时写进网页表单，只保存在本机 chrome.storage.local。</p>
+        </div>
+      </div>
+    </header>
+
+    <main class="main">
+      <section class="card">
+        <h2>基本信息</h2>
+        <p class="section-hint">姓名建议同时填写全名与「姓 / 名」，以适配不同 ATS 的字段拆分。</p>
+        <form id="resume-form" class="grid" autocomplete="off"></form>
+      </section>
+
+      <section class="card">
+        <h2>数据管理</h2>
+        <p class="section-hint">导出的 JSON 可以备份或迁移到另一台设备；导入会覆盖当前内容。</p>
+        <div class="actions">
+          <button id="save-btn" class="primary" type="submit" form="resume-form">保存</button>
+          <button id="export-btn" class="ghost" type="button">导出 JSON</button>
+          <button id="import-btn" class="ghost" type="button">导入 JSON</button>
+          <button id="clear-btn" class="danger" type="button">清空</button>
+          <input id="import-input" type="file" accept="application/json,.json" hidden />
+        </div>
+        <p id="status" class="status" role="status">读取中…</p>
+        <pre id="errors" class="errors" hidden></pre>
+      </section>
+    </main>
+
+    <script src="../lib/resume-schema.js"></script>
+    <script src="../lib/storage.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>
