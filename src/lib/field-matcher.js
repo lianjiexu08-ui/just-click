@@ -43,7 +43,6 @@
     'website',
     'summary'
   ];
-
   var FIELD_LABELS = {
     fullName: '姓名',
     firstName: '名',
@@ -57,6 +56,38 @@
     website: '个人网站',
     summary: '经历摘要'
   };
+
+  /**
+   * 合并内置 key 与用户自定义 key：内置 11 个固定在前，自定义按用户顺序，
+   * 重复项去掉。UI 下拉、notFound 统计都以此为准。
+   */
+  function resolveFieldKeys(customKeys) {
+    var out = FIELD_KEYS.slice();
+    if (!Array.isArray(customKeys)) return out;
+    for (var i = 0; i < customKeys.length; i++) {
+      var key = customKeys[i];
+      if (typeof key !== 'string') continue;
+      var trimmed = key.trim();
+      if (!trimmed) continue;
+      if (out.indexOf(trimmed) === -1) out.push(trimmed);
+    }
+    return out;
+  }
+
+  /** 规则引擎按需取：浏览器里走 globalThis.JC，Node 里回落到 require */
+  function rulesApi() {
+    if (typeof globalThis !== 'undefined' && globalThis.JC && typeof globalThis.JC.matchUserRules === 'function') {
+      return globalThis.JC;
+    }
+    if (typeof require === 'function') {
+      try {
+        return require('./rules.js');
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    return null;
+  }
 
   /** 平局时的优先顺序：越具体的字段越靠前 */
   var KEY_PRIORITY = [
@@ -345,10 +376,33 @@
 
   /**
    * 识别单个字段。
-   * @returns {{key:string, confidence:number, score:number, attr:string, token:string, ats:string|null}|null}
+   * 优先级严格为：用户规则 → ATS 精确规则 → 内置字典。
+   * 用户规则命中即短路，保证「用户显式教的」永远压过任何猜测。
+   *
+   * @param {object} desc 字段描述符
+   * @param {{fieldKeys?:string[], fieldLabels?:object, rules?:Array, url?:string}} [options]
+   * @returns {{key:string, confidence:number, score:number, attr:string, token:string, ats:string|null, source?:string, ruleId?:string}|null}
    */
-  function detectFieldType(desc) {
+  function detectFieldType(desc, options) {
     if (!desc || isExcludedDescriptor(desc)) return null;
+
+    var opts = options || {};
+    var R = rulesApi();
+    if (R && Array.isArray(opts.rules) && opts.rules.length) {
+      var ruleHit = R.matchUserRules(desc, opts.rules, { url: opts.url });
+      if (ruleHit) {
+        return {
+          key: ruleHit.key,
+          confidence: 1,
+          score: MAX_SCORE,
+          attr: ruleHit.attr,
+          token: ruleHit.pattern,
+          ats: null,
+          source: 'user-rule',
+          ruleId: ruleHit.rule && ruleHit.rule.id ? ruleHit.rule.id : ''
+        };
+      }
+    }
 
     var ats = matchAts(desc);
     if (ats) {
@@ -371,6 +425,9 @@
       var attrWeight = ATTR_WEIGHTS[src.attr] || 1;
       for (var k = 0; k < FIELD_KEYS.length; k++) {
         var key = FIELD_KEYS[k];
+        // 字典只覆盖内置 key：自定义 key 没有词库，只能靠用户规则命中。
+        // 这条 if 是「禁止把自定义 key 硬编码进字典」的运行时保险。
+        if (!Object.prototype.hasOwnProperty.call(DICTIONARY, key)) continue;
         var rejects = REJECTS[key] || [];
         if (rejects.length && containsAny(src.norm, rejects)) continue;
         var tokens = DICTIONARY[key] || [];
@@ -412,6 +469,7 @@
   /**
    * 批量识别表单。
    * @param {Array} descriptors
+   * @param {object} [options] 透传给 detectFieldType（rules / url / fieldKeys / fieldLabels）
    * @returns {Array<{index:number,key:string,confidence:number,ats:string|null}>} 置信度不足的字段不会出现
    */
   function matchForm(descriptors, options) {
@@ -420,39 +478,55 @@
     var list = Array.isArray(descriptors) ? descriptors : [];
     var out = [];
     for (var i = 0; i < list.length; i++) {
-      var hit = detectFieldType(list[i]);
+      var hit = detectFieldType(list[i], opts);
       if (!hit) continue;
       if (hit.confidence < minConfidence) continue;
-      out.push({
+      var item = {
         index: i,
         key: hit.key,
         confidence: hit.confidence,
         ats: hit.ats,
         attr: hit.attr
-      });
+      };
+      // 只有用户规则命中才附带来源信息，保证无规则时的返回结构与迭代 1 完全一致
+      if (hit.source === 'user-rule') {
+        item.source = 'user-rule';
+        item.ruleId = hit.ruleId || null;
+      }
+      out.push(item);
     }
     return out;
+  }
+
+  function labelForOption(key, options) {
+    var labels = options && options.fieldLabels ? options.fieldLabels : null;
+    if (labels && typeof labels[key] === 'string' && labels[key]) return labels[key];
+    if (Object.prototype.hasOwnProperty.call(FIELD_LABELS, key)) return FIELD_LABELS[key];
+    return key;
   }
 
   /**
    * 生成填充计划：识别 + 取值 + 缺失统计。
    * @param {Array} descriptors
    * @param {Object} valueMap 形如 {email: 'a@b.c'}，值为空字符串表示简历里没写
+   * @param {object} [options] {fieldKeys, fieldLabels, rules, url, minConfidence}
    * @returns {{assignments:Array, missing:Array, notFound:Array}}
    */
   function buildFillPlan(descriptors, valueMap, options) {
+    var opts = options || {};
     var values = valueMap || {};
-    var matches = matchForm(descriptors, options);
+    var matches = matchForm(descriptors, opts);
+    var dynamicKeys = resolveFieldKeys(opts.fieldKeys);
     var assignments = [];
-    var filledKeys = {};
-    var missingMap = {};
+    var filledKeys = Object.create(null);
+    var missingMap = Object.create(null);
     var seenIndex = {};
 
     for (var i = 0; i < matches.length; i++) {
       var m = matches[i];
       if (seenIndex[m.index]) continue;
       var value = typeof values[m.key] === 'string' ? values[m.key].trim() : '';
-      var label = FIELD_LABELS[m.key] || m.key;
+      var label = labelForOption(m.key, opts);
       if (!value) {
         // 页面上认出了字段，但简历里没写 -> 记为「缺数据」
         if (!missingMap[m.key]) missingMap[m.key] = { key: m.key, label: label, reason: 'no-value' };
@@ -460,14 +534,19 @@
       }
       seenIndex[m.index] = true;
       filledKeys[m.key] = true;
-      assignments.push({
+      var assignment = {
         index: m.index,
         key: m.key,
         label: label,
         value: value,
         confidence: m.confidence,
         ats: m.ats || null
-      });
+      };
+      if (m.source === 'user-rule') {
+        assignment.source = 'user-rule';
+        assignment.ruleId = m.ruleId || null;
+      }
+      assignments.push(assignment);
     }
 
     var missing = [];
@@ -478,11 +557,11 @@
     }
 
     var notFound = [];
-    for (var j = 0; j < FIELD_KEYS.length; j++) {
-      var key = FIELD_KEYS[j];
+    for (var j = 0; j < dynamicKeys.length; j++) {
+      var key = dynamicKeys[j];
       var v = typeof values[key] === 'string' ? values[key].trim() : '';
       if (v && !filledKeys[key]) {
-        notFound.push({ key: key, label: FIELD_LABELS[key] || key });
+        notFound.push({ key: key, label: labelForOption(key, opts) });
       }
     }
 
@@ -501,6 +580,7 @@
     GLOBAL_REJECTS: GLOBAL_REJECTS,
     ATS_RULES: ATS_RULES,
     normalizeText: normalizeText,
+    resolveFieldKeys: resolveFieldKeys,
     collectSources: collectSources,
     isExcludedDescriptor: isExcludedDescriptor,
     matchAts: matchAts,

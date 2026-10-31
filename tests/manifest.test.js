@@ -49,8 +49,19 @@ test('content script 存在且加载顺序正确', () => {
   const scripts = manifest.content_scripts[0].js;
   for (const file of scripts) assertExists(file, 'content_scripts');
 
-  const order = scripts.map((s) => (s.includes('resume-schema') ? 0 : s.includes('field-matcher') ? 1 : 2));
-  assert.deepEqual(order, [0, 1, 2], `content_scripts 顺序错误：${scripts.join(' → ')}`);
+  // 迭代 2 起依赖链更长：schema → rules → matcher → learner → content
+  const expected = [
+    'lib/resume-schema.js',
+    'lib/rules.js',
+    'lib/field-matcher.js',
+    'lib/learner.js',
+    'content/content.js'
+  ];
+  assert.deepEqual(
+    scripts.map((s) => s.replace(/^\/+/, '')),
+    expected,
+    `content_scripts 顺序错误：${scripts.join(' → ')}`
+  );
 });
 
 test('content script 的匹配范围覆盖 http/https', () => {
@@ -101,7 +112,13 @@ test('src 下的 js 不使用 ES module 语法（content script 只能跑经典�
 });
 
 test('库文件遵循 UMD 双模导出（可在 Node 里 require）', () => {
-  for (const rel of ['lib/resume-schema.js', 'lib/field-matcher.js', 'lib/storage.js']) {
+  for (const rel of [
+    'lib/resume-schema.js',
+    'lib/rules.js',
+    'lib/field-matcher.js',
+    'lib/learner.js',
+    'lib/storage.js'
+  ]) {
     const content = fs.readFileSync(srcFile(rel), 'utf8');
     assert.ok(content.includes('module.exports'), `${rel} 缺少 module.exports`);
     assert.ok(content.includes('globalThis'), `${rel} 缺少挂载到全局对象的逻辑`);

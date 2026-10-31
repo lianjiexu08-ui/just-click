@@ -110,10 +110,19 @@ async function validateManifest() {
     for (const res of bundle.resources || []) await checkRef(res, 'manifest.web_accessible_resources');
   }
 
-  // content script 有加载顺序依赖：schema 必须在 matcher 之前，matcher 必须在 content 之前
-  const idx = (name) => scripts.findIndex((s) => s.includes(name));
-  if (idx('resume-schema') > idx('field-matcher') || idx('field-matcher') > idx('content/')) {
-    fail(`content_scripts 顺序错误，应为 resume-schema → field-matcher → content，当前为 ${scripts.join(' → ')}`);
+  // content script 有严格加载顺序：schema → rules → matcher → learner → content
+  const expectedOrder = [
+    'lib/resume-schema.js',
+    'lib/rules.js',
+    'lib/field-matcher.js',
+    'lib/learner.js',
+    'content/content.js'
+  ];
+  const actualOrder = scripts.map((s) => s.replace(/^\/+/, ''));
+  if (actualOrder.length !== expectedOrder.length || expectedOrder.some((file, i) => actualOrder[i] !== file)) {
+    fail(
+      `content_scripts 顺序错误，应为 ${expectedOrder.join(' → ')}，当前为 ${scripts.join(' → ')}`
+    );
   }
 
   if (!manifest.permissions?.includes('storage')) {

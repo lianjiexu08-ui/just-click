@@ -24,6 +24,7 @@ function emptyResume() {
     },
     summary: '',
     experience: '',
+    customFields: [],
     updatedAt: null
   };
 }

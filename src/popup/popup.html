@@ -18,8 +18,30 @@
 
     <main class="main">
       <button id="fill-btn" class="primary" type="button">一键填充当前页面</button>
+      <div class="actions-row">
+        <button id="learn-btn" class="secondary" type="button">从当前页学习</button>
+      </div>
 
       <div id="result" class="result" hidden></div>
+
+      <section id="learn-panel" class="learn" hidden>
+        <div class="learn-head">
+          <span>从当前页学习</span>
+          <button id="learn-close" class="link" type="button">关闭</button>
+        </div>
+        <p class="learn-hint">
+          给每个字段选一个目标（或忽略），保存后这些规则会优先于 ATS 与内置字典。
+        </p>
+        <div id="learn-list" class="learn-list"></div>
+        <label class="check">
+          <input id="learn-scope" type="checkbox" checked />
+          <span id="learn-scope-label">只在此站点生效</span>
+        </label>
+        <div class="actions-row">
+          <button id="learn-save" class="primary" type="button">保存规则</button>
+        </div>
+        <p id="learn-status" class="learn-status"></p>
+      </section>
 
       <section class="profile">
         <div class="profile-head">
@@ -44,7 +66,9 @@
     </footer>
 
     <script src="../lib/resume-schema.js"></script>
+    <script src="../lib/rules.js"></script>
     <script src="../lib/storage.js"></script>
+    <script src="../lib/learner.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "JustClick — 一键求职填充",
-  "version": "0.1.0",
-  "description": "只点一下，把姓名 / 邮箱 / 电话等常用求职字段填进任何 ATS 表单。MVP 支持 Greenhouse、Lever、Workday。",
+  "version": "0.2.0",
+  "description": "只点一下，把姓名 / 邮箱 / 电话等常用求职字段填进任何 ATS 表单。支持自定义字段与用户映射规则（从当前页学习），内置 Greenhouse、Lever、Workday 适配。",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "action": {
@@ -19,14 +19,25 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["lib/resume-schema.js", "lib/field-matcher.js", "content/content.js"],
+      "js": [
+        "lib/resume-schema.js",
+        "lib/rules.js",
+        "lib/field-matcher.js",
+        "lib/learner.js",
+        "content/content.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
   ],
   "web_accessible_resources": [
     {
-      "resources": ["lib/resume-schema.js", "lib/field-matcher.js"],
+      "resources": [
+        "lib/resume-schema.js",
+        "lib/rules.js",
+        "lib/field-matcher.js",
+        "lib/learner.js"
+      ],
       "matches": ["http://*/*", "https://*/*"]
     }
   ]

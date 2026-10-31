@@ -239,24 +239,48 @@
   function buildValueMap(resume) {
     var map = {};
     if (!resume || !window.JC || !window.JC.resolveValue) return map;
-    var keys = window.JC.FIELD_KEYS || [];
+    var keys =
+      typeof window.JC.getFieldKeys === 'function' ? window.JC.getFieldKeys(resume) : window.JC.FIELD_KEYS || [];
     for (var i = 0; i < keys.length; i++) {
       map[keys[i]] = window.JC.resolveValue(resume, keys[i]);
     }
     return map;
   }
 
-  function runFill(resume) {
+  function buildFieldLabels(resume) {
+    var labels = {};
+    if (!resume || !window.JC) return labels;
+    var keys =
+      typeof window.JC.getFieldKeys === 'function' ? window.JC.getFieldKeys(resume) : window.JC.FIELD_KEYS || [];
+    for (var i = 0; i < keys.length; i++) {
+      labels[keys[i]] =
+        typeof window.JC.labelFor === 'function'
+          ? window.JC.labelFor(resume, keys[i])
+          : (window.JC.FIELD_LABELS && window.JC.FIELD_LABELS[keys[i]]) || keys[i];
+    }
+    return labels;
+  }
+
+  function runFill(resume, rules, url) {
     if (!window.JC || typeof window.JC.buildFillPlan !== 'function') {
       return { ok: false, error: '识别引擎未加载，请重新加载插件', filled: 0, filledLabels: [], missing: [], notFound: [] };
     }
 
     var collected = collectFillables();
     var valueMap = buildValueMap(resume);
-    var plan = window.JC.buildFillPlan(collected.descriptors, valueMap, { minConfidence: 0.5 });
+    var fieldKeys =
+      typeof window.JC.getFieldKeys === 'function' ? window.JC.getFieldKeys(resume) : window.JC.FIELD_KEYS || [];
+    var plan = window.JC.buildFillPlan(collected.descriptors, valueMap, {
+      minConfidence: 0.5,
+      fieldKeys: fieldKeys,
+      fieldLabels: buildFieldLabels(resume),
+      rules: Array.isArray(rules) ? rules : [],
+      url: typeof url === 'string' && url ? url : location.href
+    });
 
     var filledLabels = [];
     var filledKeys = [];
+    var ruleHits = [];
     var failures = [];
 
     for (var i = 0; i < plan.assignments.length; i++) {
@@ -275,6 +299,7 @@
         highlight(el);
         filledLabels.push(a.label);
         if (filledKeys.indexOf(a.key) === -1) filledKeys.push(a.key);
+        if (a.ruleId && ruleHits.indexOf(a.ruleId) === -1) ruleHits.push(a.ruleId);
       } catch (e) {
         failures.push(a.label);
       }
@@ -302,7 +327,8 @@
       notFound: notFound,
       failures: failures,
       scanned: collected.descriptors.length,
-      matched: plan.assignments.length + plan.missing.length
+      matched: plan.assignments.length + plan.missing.length,
+      ruleHits: ruleHits
     };
   }
 
@@ -317,9 +343,26 @@
       return undefined;
     }
 
+    if (message.type === 'JC_SCAN_FIELDS') {
+      try {
+        if (!window.JC || typeof window.JC.collectFields !== 'function') {
+          sendResponse({ ok: false, error: '学习模块未加载，请刷新页面后重试', url: location.href, entries: [] });
+          return undefined;
+        }
+        sendResponse({
+          ok: true,
+          url: location.href,
+          entries: window.JC.collectFields(document, { isVisible: isVisible })
+        });
+      } catch (e) {
+        sendResponse({ ok: false, error: String((e && e.message) || e), url: location.href, entries: [] });
+      }
+      return undefined;
+    }
+
     if (message.type === 'JC_FILL') {
       try {
-        sendResponse(runFill(message.resume));
+        sendResponse(runFill(message.resume, message.rules, message.url));
       } catch (e) {
         sendResponse({ ok: false, error: String(e && e.message || e), filled: 0, filledLabels: [], missing: [], notFound: [] });
       }

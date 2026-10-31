@@ -1,45 +1,46 @@
-# 验收对照表
+# 迭代 2 验收对照（PRD 第 66–72 行）
 
-PRD 的三条验收标准，逐条给出「自动化证据」与「人工验证步骤」。凡是不能在 CI 里断言的（真实 Chrome 里点一下），这里明确标"需人工"，不假装已验证。
+全部 6 条来自 `PRD.md`「迭代 2：用户自定义（反过拟合）」的验收标准。
 
-## 验收标准 1：加载插件后，在 Greenhouse/Lever 公开职位页点 JustClick，姓名 / 邮箱 / 电话自动填入并高亮
+| # | 验收标准 | 自动证据（测试名） | 结果 |
+| --- | --- | --- | --- |
+| 1 | options 添加自定义字段「期望薪资」后，含 `name=expected_salary` 的模拟表单能填上该值 | `tests/custom-fields.test.js` →「验收 1：添加「期望薪资」后，name=expected_salary 的模拟表单能填上该值」 | 通过 |
+| 2 | 规则 `name contains salary → expected_salary` 覆盖内置引擎误判（构造一个字典会判错的用例） | `tests/custom-fields.test.js` →「验收 2：用户规则覆盖内置字典误判（期望薪资被误判成电话）」；基线先断言无规则时确实是 `phone` | 通过 |
+| 3 | 禁用该规则后引擎回退内置行为 | `tests/custom-fields.test.js` →「验收 3：禁用规则后回退内置行为」 | 通过 |
+| 4 | 「从当前页学习」对模拟 DOM 扫描出字段清单并生成规则 | `tests/learner.test.js` →「验收 4：手写 DOM stub 扫描出字段清单并生成规则，忽略项不生成」 | 通过 |
+| 5 | 原有 39 条测试不回归；新增 ≥ 8 条 | `npm test`：71 pass / 0 fail；新增 32 条（rules 13 / custom-fields 13 / learner 6） | 通过 |
+| 6 | `npm test`、`npm run smoke`、`npm run build` 全绿 | 三份命令 exit code 均为 0；build 产出 dist v0.2.0（14 个文件） | 通过 |
 
-| 环节 | 证据类型 | 位置 |
+## 验收 2 的用例为什么算「真误判」
+
+```js
+const tricky = { fillable: true, name: 'expected_salary', labelText: '期望薪资（可接受电话沟通）' };
+M.detectFieldType(tricky);                 // → { key: 'phone', ats: null }   ← 字典被「电话」带偏
+M.detectFieldType(tricky, { rules: [rule] }); // → { key: 'expected_salary', confidence: 1, source: 'user-rule' }
+```
+
+测试先断言基线是 `phone` 且 `ats === null`（证明不是 ATS 兜出来的），再断言规则命中后 `key/confidence/source/ruleId` 全部正确。
+
+## 反过拟合的硬约束（有测试兜底）
+
+- `M.DICTIONARY` 里没有 `expected_salary`
+- `M.FIELD_KEYS` / `S.FIELD_KEYS` 里没有 `expected_salary`
+- `M.ATS_RULES` 里没有 `target === 'expected_salary'` 的条目
+- `detectFieldType({name:'expected_salary'})` 在没有规则时返回 `null`（自定义 key 不能靠猜命中）
+
+## 测试计数
+
+| 文件 | 条数 | 说明 |
 | --- | --- | --- |
-| 三家 ATS 选择器 / 属性规则正确 | 自动化单测 | `tests/field-matcher.test.js`：「ATS 适配：Greenhouse」「Lever」「Workday」三组 |
-| 字段能被打分并生成填充计划 | 自动化单测 | 「buildFillPlan：Greenhouse 表单最小验收（姓名/邮箱/电话全部命中）」 |
-| 高亮 2 秒 | 需人工 | `src/content/content.js` 的 `highlight()`：加 `jc-filled-highlight` class，`setTimeout` 2000ms 后移除 |
-| 真实页面填入 | 需人工 | 见下方手工步骤 |
+| tests/field-matcher.test.js | 15 | 迭代 1，未改动 |
+| tests/resume-schema.test.js | 10 | 迭代 1，未改动 |
+| tests/storage.test.js | 6 | 迭代 1，未改动 |
+| tests/manifest.test.js | 8 | 迭代 1 的 8 条全部保留；其中 content_scripts 顺序断言随加载链收紧为五段精确顺序 |
+| tests/rules.test.js | 13 | 新增：规则校验/CRUD/优先级/regex 防护/sitePattern |
+| tests/custom-fields.test.js | 13 | 新增：slug、自定义字段校验、验收 1/2/3 |
+| tests/learner.test.js | 6 | 新增：DOM stub 扫描、选择器兜底、规则生成 |
+| **合计** | **71** | 0 fail |
 
-人工步骤：
-1. `npm run build` → Chrome `chrome://extensions` → 开发者模式 → 加载 `dist/`。
-2. 打开 `dist` 之前先在 options 页填好姓名、邮箱、电话并保存。
-3. 打开任一 Greenhouse 或 Lever 公开职位申请页（如 boards.greenhouse.io 上的职位）。
-4. 点扩展图标 →「一键填充当前页面」。
-5. 期望：First Name / Last Name（或 Name）、Email、Phone 被填入并高亮约 2 秒；右下角 toast 与 popup 都显示「已填 N 项」。
+## 需要人工点一遍的部分
 
-> 说明：本仓库没有真实网站的 DOM 快照，所以「页面里到底有没有被填上」只能人工确认；能自动保证的是识别与赋值计划的正确性。
-
-## 验收标准 2：options 页保存的数据持久化（chrome.storage.local）
-
-| 环节 | 证据类型 | 位置 |
-| --- | --- | --- |
-| 写入用 `chrome.storage.local.set`，读取用 `.get`，键固定 `jc.resume` | 代码 | `src/lib/storage.js`（`STORAGE_KEY`） |
-| 保存前校验、失败给出 errors | 自动化单测 | `tests/resume-schema.test.js` 校验相关用例 |
-| 导入导出往返不丢字段 | 自动化单测 | 「exportJSON / importJSON 往返不丢字段」 |
-| 刷新后仍在 | 需人工 | 保存 → 关闭 options 页 → 重开，字段应回填；popup 的完整度应同步 |
-
-## 验收标准 3：npm run build 产出 dist 可加载；npm test 通过
-
-| 环节 | 证据类型 | 位置 |
-| --- | --- | --- |
-| manifest 引用文件全部存在、字段合法、content_scripts 顺序正确 | 自动化单测 + 构建校验 | `tests/manifest.test.js`、`scripts/build.mjs` |
-| 源文件不含 ES module 语法（content script 只能跑经典脚本） | 自动化单测 | `tests/manifest.test.js` |
-| `npm test` 全绿、`npm run build` 产出 dist | 命令输出 | 见交付汇报里的原始输出 |
-
-## 已知不覆盖（MVP 有意不做）
-
-- iframe 内的表单（`all_frames: false`）
-- 文件上传字段（简历 PDF）
-- 自定义下拉组件、日期选择器
-- 学习式自定义映射、多份简历切换、7 家 ATS 全覆盖（PRD 明确列为后续迭代）
+Node 测试覆盖的是数据与规则逻辑，浏览器交互需人工确认，见 `docs/MANUAL-TEST.md`：options 页自定义字段增删改、规则表开关/编辑/删除、popup 学习面板与保存、真实页面填充后的 2 秒高亮。

@@ -24,6 +24,11 @@
 
   var RESUME_VERSION = 2;
 
+  var CUSTOM_KEY_MAX = 40;
+  var CUSTOM_LABEL_MAX = 40;
+  var CUSTOM_VALUE_MAX = 2000;
+  var CUSTOM_KEY_RE = /^[a-z][a-z0-9_]{0,39}$/;
+
   /** basics 下的可填文本字段 */
   var BASICS_KEYS = [
     'firstName',
@@ -99,12 +104,159 @@
       .trim();
   }
 
+  /**
+   * label → key：小写、非 [a-z0-9] 折叠成下划线、去首尾下划线。
+   * 纯中文会得到空串，此时由调用方补 key 或走 nextCustomKey 的兜底编号。
+   */
+  function slugifyKey(label) {
+    if (typeof label !== 'string') return '';
+    return label
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '');
+  }
+
+  /** 生成 custom_field_1/2… 形式的兜底 key，existing 可以是 key 数组或字段数组 */
+  function nextCustomKey(existing) {
+    var used = Object.create(null);
+    var list = Array.isArray(existing) ? existing : [];
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      var key = typeof item === 'string' ? item : item && typeof item.key === 'string' ? item.key : '';
+      if (key) used[key] = true;
+    }
+    var n = 1;
+    while (used['custom_field_' + n]) n++;
+    return 'custom_field_' + n;
+  }
+
+  function isBuiltinFieldKey(key) {
+    return FIELD_KEYS.indexOf(key) !== -1;
+  }
+
+  /** 只返回结构上有 key 的自定义字段；合法性由 validateResume 负责 */
+  function customFieldKeys(resume) {
+    if (!isPlainObject(resume) || !Array.isArray(resume.customFields)) return [];
+    var out = [];
+    for (var i = 0; i < resume.customFields.length; i++) {
+      var field = resume.customFields[i];
+      if (isPlainObject(field) && typeof field.key === 'string' && field.key) out.push(field.key);
+    }
+    return out;
+  }
+
+  /** 内置 ∪ 自定义，内置在前（UI 下拉与 notFound 统计都依赖这个顺序） */
+  function getFieldKeys(resume) {
+    var out = FIELD_KEYS.slice();
+    var customs = customFieldKeys(resume);
+    for (var i = 0; i < customs.length; i++) {
+      if (out.indexOf(customs[i]) === -1) out.push(customs[i]);
+    }
+    return out;
+  }
+
+  /** key → 展示名；未知 key 原样返回，便于排查规则写错目标 */
+  function labelFor(resume, key) {
+    if (typeof key !== 'string' || !key) return '';
+    if (Object.prototype.hasOwnProperty.call(FIELD_LABELS, key)) return FIELD_LABELS[key];
+    if (isPlainObject(resume) && Array.isArray(resume.customFields)) {
+      for (var i = 0; i < resume.customFields.length; i++) {
+        var field = resume.customFields[i];
+        if (isPlainObject(field) && field.key === key && typeof field.label === 'string') return field.label;
+      }
+    }
+    return key;
+  }
+
   function createEmptyResume() {
     var basics = {};
     for (var i = 0; i < BASICS_KEYS.length; i++) basics[BASICS_KEYS[i]] = '';
-    var resume = { version: RESUME_VERSION, basics: basics, updatedAt: null };
+    var resume = { version: RESUME_VERSION, basics: basics, customFields: [], updatedAt: null };
     for (var j = 0; j < TOP_KEYS.length; j++) resume[TOP_KEYS[j]] = '';
     return resume;
+  }
+
+  /**
+   * 迁移阶段只做「形状归一」，不剔除非法项：validateResume 还要靠原始条目
+   * 报出具体哪一条为什么不合法。
+   */
+  function migrateCustomFields(rawList) {
+    if (!Array.isArray(rawList)) return [];
+    var out = [];
+    for (var i = 0; i < rawList.length; i++) {
+      var item = rawList[i];
+      if (!isPlainObject(item)) continue;
+      var key = typeof item.key === 'string' ? item.key.trim() : '';
+      var label =
+        typeof item.label === 'string'
+          ? sanitizeText(item.label)
+          : typeof item.label === 'number' && isFinite(item.label)
+            ? String(item.label)
+            : '';
+      var value =
+        typeof item.value === 'string'
+          ? item.value
+          : typeof item.value === 'number' && isFinite(item.value)
+            ? String(item.value)
+            : '';
+      out.push({ key: key, label: label, value: value });
+    }
+    return out;
+  }
+
+  /** 严格校验自定义字段：非法项剔除并给 warning，重复 key 只保留第一条 */
+  function validateCustomFields(rawList) {
+    var fields = [];
+    var warnings = [];
+    var seen = Object.create(null);
+    if (!Array.isArray(rawList)) return { fields: fields, warnings: warnings };
+
+    for (var i = 0; i < rawList.length; i++) {
+      var item = rawList[i];
+      if (!isPlainObject(item)) {
+        warnings.push('自定义字段 #' + (i + 1) + ' 不是对象，已忽略');
+        continue;
+      }
+      var key = typeof item.key === 'string' ? item.key.trim() : '';
+      var label =
+        typeof item.label === 'string'
+          ? sanitizeText(item.label)
+          : typeof item.label === 'number' && isFinite(item.label)
+            ? String(item.label)
+            : '';
+      var problems = [];
+
+      if (!key) problems.push('key 不能为空');
+      else if (!CUSTOM_KEY_RE.test(key)) problems.push('key 需匹配 ' + CUSTOM_KEY_RE.source);
+      else if (isBuiltinFieldKey(key)) problems.push('不能与内置字段重名');
+      if (!label) problems.push('label 必填');
+      else if (label.length > CUSTOM_LABEL_MAX) problems.push('label 不能超过 ' + CUSTOM_LABEL_MAX + ' 字');
+
+      var rawValue = item.value;
+      if (
+        rawValue !== undefined &&
+        rawValue !== null &&
+        typeof rawValue !== 'string' &&
+        typeof rawValue !== 'number'
+      ) {
+        problems.push('value 必须是字符串');
+      }
+      if (key && seen[key]) problems.push('key 重复');
+
+      if (problems.length) {
+        warnings.push('自定义字段「' + (label || key || '#' + (i + 1)) + '」已忽略：' + problems.join('；'));
+        continue;
+      }
+
+      var value = typeof rawValue === 'number' ? String(rawValue) : typeof rawValue === 'string' ? rawValue : '';
+      if (value.length > CUSTOM_VALUE_MAX) {
+        value = value.slice(0, CUSTOM_VALUE_MAX);
+        warnings.push('自定义字段「' + label + '」的 value 超过 ' + CUSTOM_VALUE_MAX + ' 字符，已截断');
+      }
+      seen[key] = true;
+      fields.push({ key: key, label: label, value: value });
+    }
+    return { fields: fields, warnings: warnings };
   }
 
   /**
@@ -158,6 +310,7 @@
     }
 
     out.updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : null;
+    out.customFields = migrateCustomFields(raw.customFields);
     return out;
   }
 
@@ -189,8 +342,14 @@
     if (raw.basics !== undefined && !isPlainObject(raw.basics)) {
       errors.push('basics 必须是对象');
     }
+    if (raw.customFields !== undefined && raw.customFields !== null && !Array.isArray(raw.customFields)) {
+      errors.push('customFields 必须是数组');
+    }
 
     var resume = migrateResume(raw);
+    var customs = validateCustomFields(raw.customFields);
+    resume.customFields = customs.fields;
+    warnings = warnings.concat(customs.warnings);
 
     // 类型复核：迁移过程会把非字符串压平，这里对明显错误的值补报错
     if (isPlainObject(raw.basics)) {
@@ -220,8 +379,9 @@
   /** 是否存在至少一个可填字段 */
   function hasAnyData(resume) {
     if (!isPlainObject(resume)) return false;
-    for (var i = 0; i < FIELD_KEYS.length; i++) {
-      if (resolveValue(resume, FIELD_KEYS[i])) return true;
+    var keys = getFieldKeys(resume);
+    for (var i = 0; i < keys.length; i++) {
+      if (resolveValue(resume, keys[i])) return true;
     }
     return false;
   }
@@ -248,7 +408,18 @@
         v = resume.experience || resume.summary || '';
         break;
       default:
-        v = basics[fieldKey];
+        // 自定义 key 只从 customFields 取值，绝不回落到 basics 的同名字段
+        if (isBuiltinFieldKey(fieldKey)) {
+          v = basics[fieldKey];
+        } else if (Array.isArray(resume.customFields)) {
+          for (var i = 0; i < resume.customFields.length; i++) {
+            var field = resume.customFields[i];
+            if (isPlainObject(field) && field.key === fieldKey) {
+              v = field.value;
+              break;
+            }
+          }
+        }
     }
     return sanitizeText(v);
   }
@@ -285,6 +456,10 @@
 
   return {
     RESUME_VERSION: RESUME_VERSION,
+    CUSTOM_KEY_MAX: CUSTOM_KEY_MAX,
+    CUSTOM_LABEL_MAX: CUSTOM_LABEL_MAX,
+    CUSTOM_VALUE_MAX: CUSTOM_VALUE_MAX,
+    CUSTOM_KEY_RE: CUSTOM_KEY_RE,
     BASICS_KEYS: BASICS_KEYS,
     TOP_KEYS: TOP_KEYS,
     FIELD_KEYS: FIELD_KEYS,
@@ -292,8 +467,15 @@
     FORM_FIELDS: FORM_FIELDS,
     isPlainObject: isPlainObject,
     sanitizeText: sanitizeText,
+    slugifyKey: slugifyKey,
+    nextCustomKey: nextCustomKey,
+    isBuiltinFieldKey: isBuiltinFieldKey,
+    customFieldKeys: customFieldKeys,
+    getFieldKeys: getFieldKeys,
+    labelFor: labelFor,
     createEmptyResume: createEmptyResume,
     migrateResume: migrateResume,
+    validateCustomFields: validateCustomFields,
     validateResume: validateResume,
     hasAnyData: hasAnyData,
     resolveValue: resolveValue,
