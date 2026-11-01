@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JustClick — 一键求职填充",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "只点一下，把姓名 / 邮箱 / 电话等常用求职字段填进任何 ATS 表单。三组简历模板 + 填充报告（已填/待填/未匹配）+ 待填项跨页携带与内联补填，支持自定义字段与用户映射规则（从当前页学习），内置 Greenhouse、Lever、Workday 适配。",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],

@@ -163,6 +163,11 @@ async function main() {
   await rm(DIST, { recursive: true, force: true });
   await mkdir(DIST, { recursive: true });
   await cp(SRC, DIST, { recursive: true });
+  // vendor/ 原样拷入 dist/vendor/（pdfjs 等第三方本地库，无远程代码）
+  const vendorDir = path.join(ROOT, 'vendor');
+  if (await exists(vendorDir)) {
+    await cp(vendorDir, path.join(DIST, 'vendor'), { recursive: true });
+  }
 
   const bytes = (
     await Promise.all(files.map(async (f) => (await stat(f.full)).size))
