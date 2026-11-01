@@ -150,15 +150,34 @@ async function validateHtml() {
   return files;
 }
 
+/**
+ * vendor 下的本地第三方库：迭代 4 的 PDF 提取依赖 pdf.js。
+ * 开源库必须 vendor 进仓库（MV3 禁止远程代码），所以缺文件时构建就该红。
+ */
+const VENDOR_REQUIRED = ['pdfjs/pdf.min.mjs', 'pdfjs/pdf.worker.min.mjs', 'pdfjs/LICENSE.md'];
+
+async function validateVendor() {
+  const vendorDir = path.join(ROOT, 'vendor');
+  for (const rel of VENDOR_REQUIRED) {
+    checked.push('vendor/' + rel);
+    if (!(await exists(path.join(vendorDir, rel)))) {
+      fail(`缺少 vendor/${rel}：PDF 提取依赖它，必须本地 vendor 化（不允许 CDN）`);
+    }
+  }
+}
+
+function printErrors() {
+  console.error('\n✖ 构建校验失败：');
+  for (const message of errors) console.error('  - ' + message);
+  process.exit(1);
+}
+
 async function main() {
   const manifest = await validateManifest();
   const files = await validateHtml();
+  await validateVendor();
 
-  if (errors.length) {
-    console.error('\n✖ 构建校验失败：');
-    for (const message of errors) console.error('  - ' + message);
-    process.exit(1);
-  }
+  if (errors.length) printErrors();
 
   await rm(DIST, { recursive: true, force: true });
   await mkdir(DIST, { recursive: true });
@@ -169,13 +188,35 @@ async function main() {
     await cp(vendorDir, path.join(DIST, 'vendor'), { recursive: true });
   }
 
+  // 拷完再核一遍：dist/vendor 里必须真的躺着 pdf.js，否则扩展装上去 AI 导入会静默失效
+  const distVendor = path.join(DIST, 'vendor');
+  let vendorFiles = [];
+  if (await exists(distVendor)) {
+    vendorFiles = await walk(distVendor);
+    for (const rel of VENDOR_REQUIRED) {
+      if (!(await exists(path.join(distVendor, rel)))) fail(`dist/vendor/${rel} 未生成`);
+    }
+  } else {
+    fail('dist/vendor 未生成（pdf.js 需要随扩展一起发布）');
+  }
+  if (errors.length) printErrors();
+
   const bytes = (
     await Promise.all(files.map(async (f) => (await stat(f.full)).size))
   ).reduce((sum, n) => sum + n, 0);
 
   console.log('✔ manifest.json 校验通过（Manifest V' + manifest.manifest_version + '，v' + manifest.version + '）');
-  console.log('✔ ' + new Set(checked).size + ' 个引用文件全部存在');
-  console.log('✔ 已产出 dist/（' + files.length + ' 个文件，' + (bytes / 1024).toFixed(1) + ' KB）');
+  console.log('✔ ' + new Set(checked).size + ' 个引用文件全部存在（含 vendor/pdfjs）');
+  console.log(
+    '✔ 已产出 dist/（' +
+      files.length +
+      ' 个主文件 + ' +
+      vendorFiles.length +
+      ' 个 vendor 文件，主产物 ' +
+      (bytes / 1024).toFixed(1) +
+      ' KB）'
+  );
+  console.log('✔ dist/vendor/ 已就位（pdf.js 本地加载，无 CDN）');
   for (const file of files) console.log('  dist/' + file.rel.split(path.sep).join('/'));
   console.log('\n下一步：Chrome → chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选择 dist/ 目录');
   console.log('（源码零依赖，无需 npm install）');

@@ -2,6 +2,26 @@
 
 一键求职填充 Chrome 插件（Manifest V3，零依赖）：填一次简历，在任意 ATS 表单上只点一下。
 
+## 迭代 4 新增（AI 简历导入，BYOK）
+
+不再手抄 PDF：自己配一个 OpenAI 兼容接口（baseURL + API Key + 模型名），上传 PDF/TXT（或粘贴文本）→ AI 抽成结构化字段 → **预览表逐行确认** → 写入简历 → 照常一键填表。
+
+1. **供应商设置**：`baseURL`（默认 `https://api.deepseek.com/v1`）、`apiKey`（password 型，存 `chrome.storage.local` 的 `jc.aiSettings`，与简历数据分开）、`model`。点「测试连接」发一个 `max_tokens=8` 的最小请求，2 秒内给出 `✓ 模型名` 或分类后的 `✗ 原因`（网络 / 401 / 404 / 429 / 非 JSON）。输入框旁有「清除」只删 key，保留地址与模型。
+2. **上传与提取**：文件选择器 + 拖拽虚线框接受 `.pdf` / `.txt`，另有「粘贴文本」兜底。PDF 走 **vendor 化的 pdf.js**（`vendor/pdfjs/`，Apache-2.0，构建时拷进 `dist/vendor/`），`workerSrc` 用 `chrome.runtime.getURL('vendor/pdfjs/pdf.worker.min.mjs')`，**全链路无 CDN、无远程代码**；`isEvalSupported:false` 避免 CSP 下的 eval。逐页拼接、页间 `\n`，文本超 30000 字符截断并提示。扫描件（无文本层）明确提示改用粘贴。
+3. **结构化解析**：`buildPrompt(fieldSpecs, text)` 把「当前全部字段（内置 + 自定义）+ 说明」拼进提示词，要求只输出 JSON、不确定就省略、禁止编造；请求 `POST {baseURL}/chat/completions`，`temperature:0` + `response_format:{type:"json_object"}`，端点不支持该参数时**自动去掉重试一次**（只重试一次，且不对 401/404/429/网络失败重试）。`parseAiResume` 容错：剥 ```json 围栏、从杂质里按括号配平截 JSON、未知 key 忽略、数字转字符串、空值丢弃、超长截断。
+4. **预览与合并**：每行可编辑、可勾「跳过」、可勾「覆盖」；默认「AI 为空不覆盖已有值」，已有值的行不勾覆盖就保留原值。点「确认写入」才落库（走 `validateResume` 校验），写入后提示「可到任意申请页一键填充」，**不自动打开页面**。
+
+安全底线：key 只出现在 `Authorization` 头里，不写日志、不进错误文案（端点回显也会被 `***` 抹掉），不随「导出 JSON」导出；AI 导入全程不碰网页表单、不提交任何东西。
+
+### 新增纯逻辑模块（都可单测，不碰 DOM）
+
+| 文件 | 职责 |
+| --- | --- |
+| `lib/ai.js` | `chunkText` / `buildPrompt` / `parseJsonLoose` / `parseAiResume` / `previewRows` / `applyAiRows` / 错误分类，全部纯函数 |
+| `lib/ai-client.js` | `chatUrl`、`callChat`（含 `response_format` 降级重试）、`testConnection`、`extractResume`；`fetchImpl` 可注入，key 不进错误文案 |
+| `lib/ai-settings.js` | `jc.aiSettings` 存取与校验、`maskKey`、`clearApiKey`；零 console |
+| `lib/pdf-text.js` | `extractPdfText`（动态 import 本地 pdf.js）、`extractTextFromFile`、扫描件判定、`chunkText` 转发 |
+
 ## 迭代 3 新增（简历模板 + 填充报告 + 待填补充）
 
 用户手里是一份 PDF 简历时，他要的不是「解析 PDF」，而是三件事：照着模板录一次、每次填充知道填了什么没填什么、没填的当场补上。
@@ -49,7 +69,7 @@
 src/
   manifest.json          MV3 声明（content_scripts 顺序：schema → rules → matcher → learner → content）
   background/            service worker（安装时初始化存储）
-  content/content.js     DOM 抽取 / 写值 / 高亮 / 消息（JC_FILL、JC_SCAN_FIELDS）
+  content/content.js     DOM 抽取 / 写值 / 高亮 / 消息（JC_FILL、JC_SCAN_FIELDS、JC_FILL_ONE）
   lib/resume-schema.js   简历 schema、自定义字段、slug、校验、导入导出（UMD）
   lib/rules.js           用户规则引擎：创建/校验/匹配/排序（UMD，纯函数）
   lib/field-matcher.js   字段识别：用户规则 → ATS → 字典（UMD，纯函数）
@@ -59,19 +79,24 @@ src/
   lib/report.js          填充报告三区块 / 截断 / 文本导出（UMD，纯函数）
   lib/supplement.js      内联补值写回 + JC_FILL_ONE 增量指令（submit:false）
   lib/pending.js         jc.pending 待填项：去重、持久化、横幅文案
-  options/               简历模板（三组）+ 待填清单 + 规则表
+  lib/ai.js              AI 导入纯逻辑：提示词 / 容错解析 / 预览 / 合并 / 错误分类
+  lib/ai-client.js       chat/completions 调用、测试连接、response_format 降级重试
+  lib/ai-settings.js     jc.aiSettings：baseURL / apiKey / model 校验与存取
+  lib/pdf-text.js        pdf.js 本地提取（chrome.runtime.getURL 指 worker）、扫描件判定
+  options/               简历模板（三组）+ AI 简历导入 + 待填清单 + 规则表
   popup/                 一键填充 + 填充报告 + 内联补填 + 从当前页学习
-tests/                   node:test，97 条
-scripts/build.mjs        零依赖构建：校验 manifest/html 引用 → 产出 dist/
+vendor/pdfjs/            pdf.js（pdf.min.mjs + pdf.worker.min.mjs + LICENSE，Apache-2.0）
+tests/                   node:test
+scripts/build.mjs        零依赖构建：校验 manifest/html/vendor → 产出 dist/（含 dist/vendor/）
 docs/                    验收对照与手动测试步骤
 ```
 
 ## 开发与验证
 
 ```bash
-npm test          # node --test tests/ —— 97 条
+npm test          # node --test tests/
 npm run smoke     # 6 个识别场景
-npm run build     # 校验 + 产出 dist/
+npm run build     # 校验 + 产出 dist/（含 dist/vendor/pdfjs）
 ```
 
 零依赖，无需 `npm install`（Node ≥ 18）。
@@ -82,10 +107,19 @@ npm run build     # 校验 + 产出 dist/
 
 ## 使用
 
-1. 打开扩展的 options 页，按三组模板填一次（失焦即保存）；「求职意向」「教育与其他」里的预置项可以改名或删掉，「+ 添加自定义项」可以随时加，比如 `期望薪资`。
-2. 在职位表单页打开 popup → 「一键填充当前页面」，命中字段会高亮 2 秒，随后弹出**填充报告**：已填 / 待填 / 未匹配。
-3. 报告里「待填」那行可以直接补值 → 点「补填」：值写进简历，页面上的那个输入框立刻被填上（**不会提交表单**）。
-4. 没当场补的项会挂进待填清单，下次打开 popup 顶部提示「你有 N 个待填项（上次来自 xxx.com）」，options 页也能看到同一份清单。
-5. 识别错了：点「从当前页学习」→ 给该字段选正确的目标字段 → 保存。之后这条规则优先于 ATS 与字典，可在 options 页随时禁用或删除。
+1. （可选，迭代 4）options 页「AI 简历导入」区：填 baseURL / API Key / 模型 → 「测试连接」看到 ✓ → 上传 PDF/TXT 或粘贴文本 → 「开始解析」→ 预览表逐行核对（可改值、可跳过、冲突行按需勾「覆盖」）→「确认写入」。
+2. 打开扩展的 options 页，按三组模板填一次（失焦即保存）；「求职意向」「教育与其他」里的预置项可以改名或删掉，「+ 添加自定义项」可以随时加，比如 `期望薪资`。
+3. 在职位表单页打开 popup → 「一键填充当前页面」，命中字段会高亮 2 秒，随后弹出**填充报告**：已填 / 待填 / 未匹配。
+4. 报告里「待填」那行可以直接补值 → 点「补填」：值写进简历，页面上的那个输入框立刻被填上（**不会提交表单**）。
+5. 没当场补的项会挂进待填清单，下次打开 popup 顶部提示「你有 N 个待填项（上次来自 xxx.com）」，options 页也能看到同一份清单。
+6. 识别错了：点「从当前页学习」→ 给该字段选正确的目标字段 → 保存。之后这条规则优先于 ATS 与字典，可在 options 页随时禁用或删除。
 
-数据只存在本机 `chrome.storage.local`（`jc.resume` / `jc.rules` / `jc.pending`），不上传任何服务器；填充与补填都永远不会点提交按钮。
+数据默认只存在本机 `chrome.storage.local`（`jc.resume` / `jc.rules` / `jc.pending` / `jc.aiSettings`）。**唯一的出网行为**是你主动点「开始解析」时，把简历文本发到**你自己配置的 baseURL**（不经过任何中转服务器）；AI Key 不会随导出 JSON 泄露。填充、补填、AI 导入都永远不会点提交按钮。
+
+## 已知边界（迭代 4）
+
+- **扫描件 PDF 不做 OCR**：提取不到文本层时只提示改用「粘贴文本」。
+- **不做流式输出**：请求会等到完整响应（默认超时 60 秒），期间只有状态文案，没有逐字输出。
+- **单文件、不批量、不支持 docx**（PRD 明确排除，后续迭代）。
+- **PDF 解析依赖真实 Chrome**：Node 只能测纯函数与静态约束（本地 pdf.js、无 CDN、worker 走 `chrome.runtime.getURL`）；真实 PDF 的页数/文本质量需按 `docs/MANUAL-TEST.md` 第 10 节人工确认。
+- **iframe 内表单**仍不处理（与迭代 1–3 一致）。

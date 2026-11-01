@@ -25,7 +25,27 @@
     rulesList: document.getElementById('rules-list'),
     addRuleBtn: document.getElementById('add-rule-btn'),
     reloadRulesBtn: document.getElementById('reload-rules-btn'),
-    rulesStatus: document.getElementById('rules-status')
+    rulesStatus: document.getElementById('rules-status'),
+    aiBaseUrl: document.getElementById('ai-base-url'),
+    aiApiKey: document.getElementById('ai-api-key'),
+    aiKeyClear: document.getElementById('ai-key-clear'),
+    aiModel: document.getElementById('ai-model'),
+    aiTest: document.getElementById('ai-test'),
+    aiTestStatus: document.getElementById('ai-test-status'),
+    aiConfigBadge: document.getElementById('ai-config-badge'),
+    aiDrop: document.getElementById('ai-drop'),
+    aiFileBtn: document.getElementById('ai-file-btn'),
+    aiFile: document.getElementById('ai-file'),
+    aiPaste: document.getElementById('ai-paste'),
+    aiParse: document.getElementById('ai-parse'),
+    aiReset: document.getElementById('ai-reset'),
+    aiTextMeta: document.getElementById('ai-text-meta'),
+    aiStatus: document.getElementById('ai-status'),
+    aiPreview: document.getElementById('ai-preview'),
+    aiPreviewBody: document.getElementById('ai-preview-body'),
+    aiPreviewCount: document.getElementById('ai-preview-count'),
+    aiApply: document.getElementById('ai-apply'),
+    aiCancel: document.getElementById('ai-cancel')
   };
 
   var model = null;
@@ -729,6 +749,351 @@
     setStatus('已清空', 'ok');
   }
 
+  /* ---------------------------------------------------------- AI 简历导入 */
+
+  var aiState = { settings: null, text: '', textSource: '', rows: [], busy: false };
+
+  function setAiStatus(text, kind) {
+    els.aiStatus.textContent = text;
+    els.aiStatus.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function setAiTestStatus(text, kind) {
+    els.aiTestStatus.textContent = text;
+    els.aiTestStatus.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
+  function aiSettingsFromForm() {
+    return {
+      baseURL: els.aiBaseUrl.value,
+      apiKey: els.aiApiKey.value,
+      model: els.aiModel.value
+    };
+  }
+
+  function refreshAiBadge() {
+    var configured = window.JC.isConfigured(aiState.settings);
+    els.aiConfigBadge.textContent = configured ? '已配置' : '未配置';
+    els.aiConfigBadge.className = 'badge' + (configured ? ' ok' : '');
+  }
+
+  async function loadAi() {
+    try {
+      var bag = await window.JC.loadAiSettings();
+      aiState.settings = bag.settings;
+      els.aiBaseUrl.value = bag.settings.baseURL || '';
+      els.aiModel.value = bag.settings.model || '';
+      // password 型输入框显示为 ●●●；点「清除」才真的删掉
+      els.aiApiKey.value = bag.settings.apiKey || '';
+      refreshAiBadge();
+      if (bag.configured) {
+        setAiStatus('已载入 AI 配置（' + bag.settings.model + '），可以上传简历了', 'ok');
+      } else {
+        setAiStatus('还没有配好 AI 接口：填 baseURL / API Key / 模型，点「测试连接」确认。没有 key 也能用上面的模板手填。');
+      }
+    } catch (error) {
+      setAiStatus('读取 AI 设置失败：' + ((error && error.message) || error), 'warn');
+    }
+  }
+
+  function saveAiField() {
+    return window.JC.saveAiSettings(aiSettingsFromForm())
+      .then(function (saved) {
+        if (!saved.ok) {
+          setAiStatus('设置未保存：' + saved.errors.join('；'), 'warn');
+          return saved;
+        }
+        aiState.settings = saved.settings;
+        refreshAiBadge();
+        setAiStatus('AI 设置已保存（只存在本机，不随简历 JSON 导出）', 'ok');
+        return saved;
+      })
+      .catch(function (error) {
+        setAiStatus('设置保存失败：' + ((error && error.message) || error), 'warn');
+        return { ok: false };
+      });
+  }
+
+  async function testAiConnection() {
+    var payload = aiSettingsFromForm();
+    els.aiTest.disabled = true;
+    setAiTestStatus('测试中…（最多 2 秒）');
+    try {
+      await saveAiField();
+      var result = await window.JC.testConnection({
+        baseURL: payload.baseURL,
+        apiKey: payload.apiKey,
+        model: payload.model
+      });
+      if (result.ok) {
+        setAiTestStatus('✓ ' + (result.model || payload.model) + '（' + result.ms + 'ms）', 'ok');
+      } else {
+        setAiTestStatus('✗ ' + result.message, 'warn');
+      }
+    } catch (error) {
+      setAiTestStatus('✗ ' + ((error && error.message) || error), 'warn');
+    } finally {
+      els.aiTest.disabled = false;
+    }
+  }
+
+  function aiTextMeta(text, source) {
+    if (!text) {
+      els.aiTextMeta.textContent = '';
+      return;
+    }
+    var chunk = window.JC.chunkText(text, window.JC.AI_TEXT_LIMIT);
+    els.aiTextMeta.textContent =
+      (source ? source + '：' : '') +
+      chunk.originalLength +
+      ' 字符' +
+      (chunk.truncated ? '（超过 ' + chunk.limit + '，解析时只发前 ' + chunk.limit + ' 字符）' : '');
+  }
+
+  async function handleAiFile(file) {
+    if (!file) return;
+    if (!window.JC.isPdfFile(file.name) && !window.JC.isTextFile(file.name)) {
+      setAiStatus('只支持 .pdf 与 .txt 文件', 'warn');
+      return;
+    }
+    setAiStatus('读取文件：' + file.name + '…');
+    els.aiTextMeta.textContent = '';
+    try {
+      var result = await window.JC.extractTextFromFile(file, {
+        onProgress: function (done, total) {
+          setAiStatus('提取 PDF 文本：' + done + ' / ' + total + ' 页…');
+        }
+      });
+      if (!result.ok) {
+        setAiStatus(result.error, 'warn');
+        return;
+      }
+      aiState.text = result.text;
+      aiState.textSource = file.name;
+      aiTextMeta(result.text, file.name);
+      setAiStatus('已读取 ' + file.name + '，点「开始解析」让 AI 抽取字段', 'ok');
+    } catch (error) {
+      setAiStatus('文件处理失败：' + ((error && error.message) || error), 'warn');
+    }
+  }
+
+  function renderAiPreview(meta) {
+    var rows = aiState.rows;
+    els.aiPreviewBody.innerHTML = '';
+
+    for (var i = 0; i < rows.length; i++) {
+      (function (row) {
+        var tr = document.createElement('tr');
+        tr.setAttribute('data-ai-row', row.key);
+        if (row.conflict) tr.className = 'conflict';
+
+        var tdSkip = document.createElement('td');
+        var skip = document.createElement('input');
+        skip.type = 'checkbox';
+        skip.checked = row.skip === true;
+        skip.addEventListener('change', function () {
+          row.skip = skip.checked;
+          tr.className = (row.conflict ? 'conflict' : '') + (skip.checked ? ' skipped' : '');
+        });
+        tdSkip.appendChild(skip);
+        tr.appendChild(tdSkip);
+
+        var tdLabel = document.createElement('td');
+        var name = document.createElement('strong');
+        name.textContent = row.label;
+        tdLabel.appendChild(name);
+        var key = document.createElement('code');
+        key.className = 'tpl-key';
+        key.textContent = row.key;
+        tdLabel.appendChild(key);
+        tr.appendChild(tdLabel);
+
+        var tdValue = document.createElement('td');
+        var multiline = row.value.length > 60;
+        var input = document.createElement(multiline ? 'textarea' : 'input');
+        if (multiline) input.rows = 2;
+        else input.type = 'text';
+        input.value = row.value;
+        input.setAttribute('data-ai-value', row.key);
+        input.addEventListener('input', function () {
+          row.value = input.value;
+        });
+        tdValue.appendChild(input);
+        tr.appendChild(tdValue);
+
+        var tdOver = document.createElement('td');
+        var over = document.createElement('input');
+        over.type = 'checkbox';
+        over.checked = row.overwrite === true;
+        over.disabled = !row.conflict;
+        over.title = row.conflict ? '勾选后替换已有值' : '这个字段还没有值，直接新增';
+        over.addEventListener('change', function () {
+          row.overwrite = over.checked;
+        });
+        tdOver.appendChild(over);
+        tr.appendChild(tdOver);
+
+        var tdNote = document.createElement('td');
+        tdNote.className = 'ai-note';
+        if (row.conflict) {
+          var existing = row.existing.length > 20 ? row.existing.slice(0, 20) + '…' : row.existing;
+          tdNote.textContent = '已有：' + existing + '（默认保留）';
+        } else {
+          tdNote.textContent = '新增';
+        }
+        tr.appendChild(tdNote);
+
+        els.aiPreviewBody.appendChild(tr);
+      })(aiState.rows[i]);
+    }
+
+    var conflicts = 0;
+    for (var c = 0; c < rows.length; c++) if (rows[c].conflict) conflicts++;
+    els.aiPreviewCount.textContent =
+      rows.length + ' 行' + (conflicts ? ' · ' + conflicts + ' 行已有值（默认不覆盖）' : '') + (meta && meta.degraded ? ' · 已降级重试' : '');
+    els.aiPreview.hidden = false;
+  }
+
+  async function parseWithAi() {
+    if (aiState.busy) return;
+    var payload = aiSettingsFromForm();
+    if (!window.JC.isConfigured(payload)) {
+      setAiStatus('先完成上面的 AI 设置：填 baseURL / API Key / 模型，点「测试连接」验证通过后再解析。', 'warn');
+      return;
+    }
+    var pasted = els.aiPaste.value.trim();
+    var text = pasted || aiState.text;
+    if (!text) {
+      setAiStatus('先上传 PDF / TXT，或把简历文本粘贴到下面的框里', 'warn');
+      return;
+    }
+
+    aiState.busy = true;
+    els.aiParse.disabled = true;
+    els.aiPreview.hidden = true;
+    setAiStatus('AI 正在解析，最长 60 秒…（简历文本只发往 ' + payload.baseURL + '）');
+    try {
+      var specs = window.JC.buildFieldSpecs(model);
+      var result = await window.JC.extractResume({
+        baseURL: payload.baseURL,
+        apiKey: payload.apiKey,
+        model: payload.model,
+        fieldSpecs: specs,
+        text: text
+      });
+      if (!result.ok) {
+        setAiStatus('解析失败：' + result.message, 'warn');
+        return;
+      }
+      aiState.rows = window.JC.previewRows(result.fields, model, specs);
+      renderAiPreview(result);
+      var ignored = result.ignored && result.ignored.length ? '，忽略 ' + result.ignored.length + ' 个未知 key' : '';
+      setAiStatus(
+        'AI 抽到 ' + result.fields.length + ' 个字段' + ignored + '。核对下面的预览，确认后才写入。',
+        'ok'
+      );
+    } catch (error) {
+      setAiStatus('解析异常：' + ((error && error.message) || error), 'warn');
+    } finally {
+      aiState.busy = false;
+      els.aiParse.disabled = false;
+    }
+  }
+
+  async function applyAiPreview() {
+    var result = window.JC.applyAiRows(model, aiState.rows, {});
+    if (!result.ok) {
+      setAiStatus('没有写入：' + (result.errors || []).join('；'), 'warn');
+      return;
+    }
+    var saved = await window.JC.saveResume(result.resume);
+    if (!saved.ok) {
+      setAiStatus('AI 结果校验通过，但保存失败：' + saved.errors.join('；'), 'warn');
+      return;
+    }
+    model = saved.resume;
+    // 先重算模板分组（新字段要出现在第三组），再重绘
+    updateCompleteness();
+    renderGroups();
+    renderPending();
+    els.aiPreview.hidden = true;
+    aiState.rows = [];
+    var parts = ['已写入 ' + result.applied.length + ' 项'];
+    if (result.kept.length) parts.push('保留原值 ' + result.kept.length + ' 项');
+    if (result.skipped.length) parts.push('跳过 ' + result.skipped.length + ' 项');
+    setAiStatus(parts.join('，') + '。可到任意申请页点 JustClick 一键填充（不会自动打开页面）。', 'ok');
+  }
+
+  function resetAiInput() {
+    aiState.text = '';
+    aiState.textSource = '';
+    aiState.rows = [];
+    els.aiPaste.value = '';
+    els.aiFile.value = '';
+    els.aiTextMeta.textContent = '';
+    els.aiPreview.hidden = true;
+    els.aiPreviewBody.innerHTML = '';
+    setAiStatus('已清空输入', '');
+  }
+
+  function initAiEvents() {
+    els.aiTest.addEventListener('click', testAiConnection);
+    els.aiKeyClear.addEventListener('click', function () {
+      window.JC.clearApiKey().then(function (result) {
+        if (!result.ok) {
+          setAiStatus('清除失败：' + (result.errors || []).join('；'), 'warn');
+          return;
+        }
+        aiState.settings = result.settings;
+        els.aiApiKey.value = '';
+        refreshAiBadge();
+        setAiTestStatus('');
+        setAiStatus('API Key 已清除（baseURL 与模型保留）', 'ok');
+      });
+    });
+
+    [els.aiBaseUrl, els.aiApiKey, els.aiModel].forEach(function (input) {
+      input.addEventListener('blur', saveAiField);
+    });
+
+    els.aiFileBtn.addEventListener('click', function () {
+      els.aiFile.click();
+    });
+    els.aiFile.addEventListener('change', function () {
+      handleAiFile(els.aiFile.files && els.aiFile.files[0]);
+      els.aiFile.value = '';
+    });
+
+    ['dragenter', 'dragover'].forEach(function (type) {
+      els.aiDrop.addEventListener(type, function (event) {
+        event.preventDefault();
+        els.aiDrop.classList.add('over');
+      });
+    });
+    ['dragleave', 'drop'].forEach(function (type) {
+      els.aiDrop.addEventListener(type, function (event) {
+        event.preventDefault();
+        els.aiDrop.classList.remove('over');
+      });
+    });
+    els.aiDrop.addEventListener('drop', function (event) {
+      var files = event.dataTransfer && event.dataTransfer.files;
+      handleAiFile(files && files[0]);
+    });
+
+    els.aiPaste.addEventListener('input', function () {
+      aiTextMeta(els.aiPaste.value.trim(), '粘贴文本');
+    });
+    els.aiParse.addEventListener('click', parseWithAi);
+    els.aiReset.addEventListener('click', resetAiInput);
+    els.aiApply.addEventListener('click', applyAiPreview);
+    els.aiCancel.addEventListener('click', function () {
+      els.aiPreview.hidden = true;
+      aiState.rows = [];
+      setAiStatus('已取消，没有写入任何内容');
+    });
+  }
+
   /* ---------------------------------------------------------------- 启动 */
 
   async function load() {
@@ -747,6 +1112,7 @@
     } catch (e) {
       setStatus('读取失败：' + ((e && e.message) || e), 'warn');
     }
+    await loadAi();
     await loadRules();
     await renderPending();
   }
@@ -772,6 +1138,7 @@
   els.pendingRefresh.addEventListener('click', renderPending);
   els.addRuleBtn.addEventListener('click', addRule);
   els.reloadRulesBtn.addEventListener('click', loadRules);
+  initAiEvents();
 
   window.addEventListener('beforeunload', function () {
     if (saver.isPending()) saver.flush();

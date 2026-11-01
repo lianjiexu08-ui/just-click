@@ -92,3 +92,74 @@ Node 测试覆盖的是数据与规则逻辑，浏览器交互需人工确认，
 ## 需要人工点一遍的部分（迭代 3）
 
 见 `docs/MANUAL-TEST.md` 第 6–8 节：三组模板的失焦保存与自动拼接、报告三区块在真实页面上的显示、内联补填后页面确实被填上且**没有提交**、pendingItems 在关掉 popup 后仍在。
+
+---
+
+# 迭代 4 验收对照（PRD 第 157–164 行）
+
+七条全部来自 `PRD.md`「迭代 4：AI 简历导入（BYOK）」。
+
+| # | 验收标准 | 自动证据（测试文件 → 用例） | 结果 |
+| --- | --- | --- | --- |
+| 1 | `buildPrompt`：包含全部字段 label 与「只输出 JSON」约束、text 截断 30000 | `tests/ai-prompt.test.js` →「buildFieldSpecs：内置 ∪ 自定义…」「buildPrompt：包含全部字段 label 与 key」「…明确「只输出 JSON」、禁止编造」「…35000 字文本被截到 30000 并标记」 | 通过 |
+| 2 | `parseAiResume` ≥6：正常 JSON / 围栏 / 杂质 / 未知 key / 数字转字符串 / 空值丢弃 | `tests/ai-parse.test.js`（11 条）：正常 JSON、```json 围栏、前后杂质、未知 key 忽略、数字转字符串、空值丢弃、非法 JSON、大小写/下划线、`{"fields":…}` 包裹、超长截断、数组不算简历 | 通过 |
+| 3 | `chunkText(text, 30000)` 纯函数与边界（空串 / 恰好 / 超限） | `tests/ai-prompt.test.js` →「chunkText 边界：空串 / 恰好等于上限 / 超限 / 非字符串」「chunkText：非法 limit 退回默认 30000」；`tests/pdf-vendor.test.js` →「chunkText 与 ai.js 同源」 | 通过 |
+| 4 | 设置持久化 round-trip；apiKey 不出现在任何 console/日志 | `tests/ai-settings.test.js` →「save → load round-trip」「apiKey 不进入任何 console 输出」（劫持 6 个 console 方法后断言零输出）「清除 key 保留 baseURL 与模型」「简历导出 JSON 里不含 API Key」 | 通过 |
+| 5 | 测试连接 mock fetch 三分支（200 / 401 / 网络错误） | `tests/ai-client.test.js` →「测试连接 200：返回 ✓ 模型名」「…401：分类为 auth」「…网络失败：分类为 network」「…404：分类为 not_found，且不重试」；另有 429 / config / 空 content 分支 | 通过 |
+| 6 | build 后 `dist/vendor/pdfjs/` 存在；manifest/WAR 不含远程 URL；全仓库无 CDN | `tests/pdf-vendor.test.js` →「pdf.js 已 vendor 进仓库（含 LICENSE）」「manifest 与 web_accessible_resources 里没有远程资源」「html 里没有远程 script / link」「全仓库源码里没有 CDN 链接」「npm run build 之后 dist/vendor/pdfjs 存在」（该用例**真的执行** `node scripts/build.mjs`） | 通过 |
+| 7 | 迭代 1–3 测试不回归；新增 ≥ 10；`npm test`/`npm run smoke`/`npm run build` 全绿 | 见下方「测试计数」与「本轮实测」两节 | 通过 |
+
+## 几个关键实现口径（迭代 4）
+
+- **只发往用户配置的地址**：`callChat` 的 URL 由 `chatUrl(baseURL)` 唯一生成（去尾斜杠 + `/chat/completions`），没有任何代理或兜底域名；`missingConfig` 在缺 baseURL / model / key 时直接返回 `kind: "config"` 的引导文案，不发请求。
+- **降级重试只做一次**：`response_format` 被拒（400/422）、5xx、坏 JSON 才去掉该参数重试一次；401/403（key 错）、404（路径/模型错）、429（限流）、网络失败**不重试**，避免放大问题。`attempts` 数组会回传每次尝试的 `{status, kind, withResponseFormat}`，UI 用它标「已降级重试」。
+- **key 的三重隔离**：只出现在 `Authorization` 头；`scrub()` 会把端点回显的 key 替换成 `***` 再进错误文案；`ai-settings.js` / `ai-client.js` / `options.js` 里没有任何 `console.*` 调用（有测试劫持 console 断言零输出）。设置存在独立的 `jc.aiSettings`，`exportJSON` 只导出简历。
+- **合并策略**：`applyAiRows` 是纯函数，先 `JSON.parse(JSON.stringify())` 深拷贝再写，最后统一走 `validateResume`；不合法就整体不写（返回 errors）。AI 空值/空白值直接 `skipped`，已有值且未勾「覆盖」进 `kept`，勾了才进 `applied`。
+- **写入全名会冻结自动拼接**：AI 写入 `fullName` 时置 `fullNameManual: true`，与迭代 3「用户手改后不再自动覆盖」保持一致；只给姓+名时反而不写 fullName，交给 `resolveValue` 自动拼接。
+
+## 迭代 4 测试计数
+
+| 文件 | 条数 | 说明 |
+| --- | --- | --- |
+| tests/ai-prompt.test.js | 7 | 新增：字段清单、提示词约束、截断、chunkText 边界 |
+| tests/ai-parse.test.js | 11 | 新增：容错解析 6 类 + 包裹/大小写/超长/非法 |
+| tests/ai-settings.test.js | 9 | 新增：round-trip、校验、mask、清除 key、key 不落日志 |
+| tests/ai-client.test.js | 13 | 新增：URL 拼接、200/401/404/网络、降级重试、429、config、extractResume、key 擦除 |
+| tests/ai-import.test.js | 15 | 新增：预览行、覆盖/保留/跳过/空值、自定义字段、fullName（含派生值语义）、纯函数性 |
+| tests/pdf-vendor.test.js | 9 | 新增：vendor 文件、getURL、扫描件判定、无 CDN、build 产出 |
+| 迭代 1–3 既有 11 个文件 | 97 | 未改动，全部通过 |
+| **合计** | **161** | 0 fail |
+
+## 本轮实测（同一份交付代码的终端运行记录）
+
+每个验证实例都在自己的副本里跑、父目录全程只读；跑前/跑后对父目录 36 个代码文件（src/tests/scripts 全量 .js/.mjs）做 shasum 对比，`CODE_HASHES_IDENTICAL=36_FILES`。run3 由两个独立实例各跑一次，run4 是对交付快照的回退复核。
+
+| 轮次 | 快照内容 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| run1 | 首版代码（`normalizeSettings` 未修、fullName 用例未补 `overwrite`） | 159 tests / 155 pass / **4 fail** / exit 1 | 暴露真问题：显式空串被当成缺省，导致「空模型能存进去、空 baseURL 算已配置」 |
+| run2 | 修完 `normalizeSettings` | 160 tests / 159 pass / **1 fail** / exit 1 | 只剩 fullName 用例：`firstName=San/lastName=Zhang` 由 `resolveValue` 派生出 `San Zhang` 算已有值 → 不勾覆盖就保留；**测试断言写错，产品语义正确** |
+| run3（定稿） | 补 `overwrite:true` + 新增「派生值不勾覆盖则保留」用例 + build 产物计数文案 | **161 tests / 161 pass / 0 fail，EXIT_TEST=0** | 两个独立验证实例各跑一次，结果一致；`node --check` 36/36；`npm run smoke` 6/6、EXIT_SMOKE=0；`npm run build` EXIT_BUILD=0，dist 25 文件（22 主 + 3 vendor）；`^✔` 计数同为 161 |
+| run4（交付快照） | 把预览表说明列两行文案回退（去掉 `AI 抽取 · ` 前缀），使交付树与已验证快照逐字节一致 | **161 / 161 / 0，EXIT_TEST=0，EXIT_BUILD=0** | `src/options/options.js` = `144e18e1…37b6a`（与 run3 快照同一 hash）；`node --check` EXIT=0；36 文件 shasum 跑前跑后 `CODE_HASHES_IDENTICAL=36_FILES`；副本与父目录 `diff -rq` 无差异 |
+
+node v26.8.1 / npm 11.19.0。真实终端原始输出摘要：
+
+```
+EXIT_TEST=0
+ℹ tests 161
+ℹ pass 161
+ℹ fail 0
+EXIT_SMOKE=0      （6 个识别场景全绿）
+EXIT_BUILD=0      （manifest V3 v0.5.0；24 个引用文件；dist 22 主文件 + 3 vendor，273.8 KB 主产物）
+CHECKED_COUNT=36  SYNTAX_FAILED: <none>
+```
+
+## 需要人工点一遍的部分（迭代 4）
+
+Node 里跑不出浏览器行为，见 `docs/MANUAL-TEST.md` 第 9–12 节：
+
+1. 真实 key 的「测试连接」成功分支、401 分支的**真实**响应体；
+2. 真实 PDF（文字版 / 扫描件）经 pdf.js 提取的页数与文本质量，以及 `dist/vendor/pdfjs/` 在 Chrome 里能否正常加载 worker；
+3. 预览表的编辑/跳过/覆盖在真实 UI 上的手感与最终落库结果；
+4. DevTools Network 里确认「简历文本只发往自己配置的 baseURL」、控制台搜不到 key。
+
+这四条没有自动断言，不在测试结论里冒充已验证。

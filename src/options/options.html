@@ -40,6 +40,90 @@
 
       <div id="template"></div>
 
+      <section class="card ai" id="ai-section">
+        <div class="ai-head">
+          <h2>AI 简历导入（自带 API Key）</h2>
+          <span id="ai-config-badge" class="badge">未配置</span>
+        </div>
+        <p class="section-hint">
+          配一个 OpenAI 兼容接口（baseURL + API Key + 模型名），上传 PDF 或 TXT，AI 抽成字段 → 预览确认 → 写入简历。
+          没有 key 也能用模板手填，这个区只是加速。
+        </p>
+        <div class="ai-grid">
+          <div class="field">
+            <label for="ai-base-url">接口地址 baseURL</label>
+            <input id="ai-base-url" type="url" autocomplete="off" spellcheck="false" placeholder="https://api.deepseek.com/v1" />
+          </div>
+          <div class="field">
+            <label for="ai-api-key">API Key</label>
+            <div class="ai-key-row">
+              <input id="ai-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-..." />
+              <button id="ai-key-clear" class="link small" type="button">清除</button>
+            </div>
+          </div>
+          <div class="field">
+            <label for="ai-model">模型</label>
+            <input id="ai-model" type="text" autocomplete="off" spellcheck="false" placeholder="deepseek-chat" />
+          </div>
+          <div class="field ai-test-field">
+            <button id="ai-test" class="ghost" type="button">测试连接</button>
+          </div>
+        </div>
+        <p id="ai-test-status" class="status" role="status"></p>
+        <p class="privacy">
+          隐私：简历文本只发送到你配置的接口地址；API Key 仅保存在本机 chrome.storage.local，不写入日志，
+          也不会随「导出 JSON」导出。换 key 点「清除」即可。
+        </p>
+
+        <div id="ai-drop" class="ai-drop">
+          <p>把 <strong>.pdf</strong> / <strong>.txt</strong> 拖到这里</p>
+          <p class="section-hint">或者</p>
+          <button id="ai-file-btn" class="ghost" type="button">选择文件</button>
+          <input id="ai-file" type="file" accept=".pdf,.txt,application/pdf,text/plain" hidden />
+        </div>
+
+        <div class="field ai-paste">
+          <label for="ai-paste">或直接粘贴简历文本（扫描件、复制受限时用这个）</label>
+          <textarea id="ai-paste" rows="5" placeholder="把简历内容粘贴到这里……"></textarea>
+        </div>
+
+        <div class="actions">
+          <button id="ai-parse" class="primary" type="button">开始解析</button>
+          <button id="ai-reset" class="ghost" type="button">清空输入</button>
+          <span id="ai-text-meta" class="save-hint"></span>
+        </div>
+        <p id="ai-status" class="status" role="status"></p>
+
+        <div id="ai-preview" class="ai-preview" hidden>
+          <div class="ai-preview-head">
+            <h3>预览：确认后才写入</h3>
+            <span id="ai-preview-count" class="save-hint"></span>
+          </div>
+          <p class="section-hint">
+            AI 给的值可以直接改；不想写的行勾「跳过」；已有值的行默认保留原值，勾「覆盖」才替换。
+            AI 没给值的字段不会覆盖你已填的内容。
+          </p>
+          <div class="ai-table-wrap">
+            <table class="ai-table">
+              <thead>
+                <tr>
+                  <th>跳过</th>
+                  <th>字段</th>
+                  <th>AI 值（可编辑）</th>
+                  <th>覆盖</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody id="ai-preview-body"></tbody>
+            </table>
+          </div>
+          <div class="actions">
+            <button id="ai-apply" class="primary" type="button">确认写入</button>
+            <button id="ai-cancel" class="ghost" type="button">取消</button>
+          </div>
+        </div>
+      </section>
+
       <section class="card">
         <h2>待填清单</h2>
         <p class="section-hint">
@@ -73,6 +157,10 @@
     <script src="../lib/template.js"></script>
     <script src="../lib/supplement.js"></script>
     <script src="../lib/pending.js"></script>
+    <script src="../lib/ai.js"></script>
+    <script src="../lib/ai-client.js"></script>
+    <script src="../lib/ai-settings.js"></script>
+    <script src="../lib/pdf-text.js"></script>
     <script src="options.js"></script>
   </body>
 </html>
