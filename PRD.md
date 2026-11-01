@@ -118,3 +118,47 @@ popup 增加「从当前页学习」按钮：
 5. pendingItems：未补的待填项跨"会话"存活（单测用存储 stub 验证持久化与去重）
 6. fullName 自动拼接逻辑与手动改写保护（单测）
 7. 迭代 1/2 全部测试不回归；新增测试 ≥ 10；`npm test`/`npm run smoke`/`npm run build` 全绿
+
+---
+
+# 迭代 4：AI 简历导入（BYOK：baseURL + API Key + 上传简历自动解析）
+
+## 场景
+用户手里是 PDF 简历。手动填模板仍嫌麻烦。给他：自己配一个 OpenAI 兼容接口（baseURL + API Key + 模型名），上传 PDF → AI 抽取成结构化字段 → 预览确认 → 写入简历 → 之后照常一键填表。
+
+## 需求 1：AI 供应商设置（options 新增「AI 简历导入」区）
+- 三个输入：`baseURL`（默认 `https://api.deepseek.com/v1`，含 /v1）、`apiKey`（password 型，存储于 chrome.storage.local，仅发往用户配置的 baseURL）、`model`（文本框，如 deepseek-chat）
+- 「测试连接」按钮：发一个 max_tokens=8 的请求，2 秒内显示 ✓ 模型名 / ✗ 原因（网络/401/404/CORS）
+- 明示隐私一行字：「简历文本只发送到你配置的接口地址」
+- 设置独立于简历数据保存；key 输入后显示为 ●●●，可清除
+
+## 需求 2：上传与文本提取
+- 文件选择器接受 `.pdf,.txt`，以及拖拽到虚线框；另提供「粘贴文本」多行框（无文件时的兜底）
+- PDF 提取：**vendor 化 pdf.js**（Apache-2.0）——`vendor/pdfjs/` 提交进仓库（pdf.min.mjs + pdf.worker.min.mjs），`build.mjs` 拷贝到 `dist/vendor/`，options 页用动态 import 加载（MV3 禁止远程代码，**严禁 CDN**）
+- 提取为纯函数 `extractPdfText(arrayBuffer): Promise<string>`（逐页拼接，页间 \n）；worker 路径用 chrome.runtime.getURL 指向 dist 内资源
+- 文本超 30000 字符截断（提示已截断）
+
+## 需求 3：AI 结构化解析
+- 纯函数 `buildPrompt(fieldSpecs, text)`：fieldSpecs = 当前全部字段（内置 + 用户自定义，含 label 与说明：姓/名分开、期望薪资带单位等），要求「只输出 JSON 对象，key 为字段 key，值为字符串，不确定的字段省略，禁止编造」
+- 请求：POST {baseURL}/chat/completions，`response_format: {type:"json_object"}`（部分兼容端点不支持——失败则自动重试一次不带该参数），temperature 0
+- 纯函数 `parseAiResume(json, fieldSpecs)`：容错解析（剥 ```json 围栏、JSON.parse 失败时提取首个 {...} 块）、未知 key 忽略、值转字符串 trim、空值丢弃
+- 结果进入**预览表**：每行 = 字段 label + AI 值（可编辑）+ 来源置信提示；「确认写入」才落库，可勾选跳过某些行；与现有简历值合并策略：默认「AI 为空不覆盖已有值」，预览中每行可切换覆盖
+- key 不存在/未配时，导入区显示引导而非报错堆栈
+
+## 需求 4：解析后直接可填
+写入成功后提示「可到任意申请页一键填充」；不自动打开页面（保持用户控制）。
+
+## 边界与安全
+- 扫描件（图片型 PDF）提取为空文本 → 明确提示「该 PDF 无文本层，可能是扫描件，请用粘贴文本方式」
+- API 错误分类展示：网络失败 / 401 key 无效 / 404 路径或模型不存在 / 429 限流 / 响应非 JSON
+- 不自动提交任何表单（底线不变）；不在日志/console 打印 apiKey 与完整简历文本
+- MVP 不做：流式输出、多文件批量、docx（后续迭代）
+
+## 验收标准（全部必须）
+1. `buildPrompt` 单测：包含全部字段 label 与「只输出 JSON」约束、text 截断到 30000
+2. `parseAiResume` 单测 ≥6：正常 JSON / ```json 围栏 / 前后杂质文本 / 未知 key 忽略 / 数字值转字符串 / 空值丢弃
+3. `extractPdfText` 无法在 node 直测（依赖 DOM），但须提供 `chunkText(text, 30000)` 纯函数并单测边界（空串/恰好在限/超限）
+4. 设置持久化：save/load round-trip 单测（storage stub），apiKey 不出现在任何 console/日志输出（单测断言 console 调用参数不含 key）
+5. 测试连接按钮：mock fetch 三分支（200/401/网络错误）单测
+6. build 后 `dist/vendor/pdfjs/` 存在且 manifest/web_accessible 资源不含远程 URL；grep 全仓库无 CDN 链接
+7. 迭代 1-3 全部测试不回归；新增测试 ≥ 10；`npm test`/`npm run smoke`/`npm run build` 全绿
