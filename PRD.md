@@ -202,3 +202,31 @@ popup 增加「从当前页学习」按钮：
 4. 现有 161 测试不回归；新增测试 ≥ 15；`npm test`/`npm run smoke`/`npm run build` 全绿
 5. build 后 grep dist 无 CDN/远程 URL；all_frames 不改变 matches 范围（仍 http/https）
 6. options「从当前页学习」在多 frame 页面能列出子 frame 字段（标注 frame 域名）
+
+---
+
+# 迭代 6：浏览器 E2E 基建（Playwright 真实站点 mock 验证）
+
+## 动机
+迭代 5 的教训：smoke（字段样本级）全绿 ≠ 真实页面能用。平台验证门禁已支持 `npm run e2e` 档（verification.mjs 会执行该脚本并计入 verified/failed），本轮把 E2E 基建补上。
+
+## 需求
+1. 依赖：devDependencies 加 playwright（chromium）；`npm run e2e` 跑全部 E2E 用例
+2. **mock ATS 站点**（tests/e2e/fixtures/*.html，本地 file:// 或内置 http 服务）：
+   - greenhouse-mock.html：标准表单（first_name/last_name/email/phone + 开放问题 textarea）
+   - zhipin-mock.html：Boss直聘风格投递弹窗（name/phone/email）
+   - workday-shadow-mock.html：字段放 2 层 shadowRoot 里
+   - iframe-page.html：父页嵌 iframe 表单（Greenhouse 嵌入场景）
+3. **用例**（加载 dist/ 扩展，chromium `--load-extension` + `--headless=new`）：
+   - 每个 mock 页：注入简历（storage 预置）→ 触发填充（模拟 popup 消息或直接调 content 暴露的填充入口）→ 断言字段值 + 高亮 class 存在
+   - 开放问题必须为空
+   - iframe 用例：填充发生在 iframe 内
+   - shadow 用例：shadow 内字段被填充
+4. 扩展加载前提：manifest MV3 service_worker 可在 headless=new 工作；若 popup 消息难模拟，允许 content script 暴露 `window.__justclick_fill__`（仅测试钩子，需在 build 时由环境变量开关，默认不暴露）
+5. CI 友好：CI=1 单次执行不 watch；超时上限单用例 15s
+
+## 验收
+1. `npm run e2e` 全绿（≥6 个用例：4 mock 页 + iframe + shadow）
+2. GGB 验证门禁跑 `npm run e2e` 计入结论（平台已支持）
+3. `npm test` 204 不回归；新增文件不破坏 build（e2e/ 不进 dist）
+4. PRD 更新使用说明（如何本地跑 E2E）
