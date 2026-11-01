@@ -133,3 +133,49 @@ test('npm run build 之后 dist/vendor/pdfjs 存在且包含 pdf.js 两个文件
   assert.ok(fs.existsSync(path.join(ROOT, 'dist', 'lib', 'ai.js')), 'dist 里应包含 AI 模块');
   assert.ok(fs.existsSync(path.join(ROOT, 'dist', 'lib', 'pdf-text.js')), 'dist 里应包含 pdf-text.js');
 });
+
+/**
+ * 迭代 5 验收 5：build 产物必须带 all_frames、包含 shadow/frames，且没有任何远程资源引用。
+ *
+ * 「远程资源引用」的判据（刻意写窄，避免把普通字符串误判成 CDN）：
+ *   1) html 的 <script src="http(s)://"> / <link href="http(s)://">；
+ *   2) JS 里 import("http…") / importScripts("http…")；
+ *   3) CSS/JS 里 url(http…) 或 @import http…；
+ *   4) 指向远程 .js/.mjs/.css/.woff/.ttf/.png/.jpg/.svg 等可加载资源的 URL 字面量。
+ * 允许：chrome-extension:// 自引用、注释/文案里的示例地址（如默认 API baseURL
+ * https://api.deepseek.com/v1、输入框 placeholder https://github.com/xxx），以及
+ * vendor/ 下第三方库（pdf.js 内部含 XML 命名空间等非资源 URL）。
+ */
+test('迭代 5：dist 的 all_frames=true、包含 shadow/frames，且无远程资源引用', () => {
+  const dist = path.join(ROOT, 'dist');
+  const distManifest = JSON.parse(fs.readFileSync(path.join(dist, 'manifest.json'), 'utf8'));
+  assert.equal(distManifest.content_scripts[0].all_frames, true);
+  // 0.6.1：版本随 package.json / src/manifest.json 同步；这里校验 build 产物不带旧版本
+  assert.equal(distManifest.version, '0.6.1');
+  assert.ok(fs.existsSync(path.join(dist, 'lib', 'shadow.js')), 'dist/lib/shadow.js 未生成');
+  assert.ok(fs.existsSync(path.join(dist, 'lib', 'frames.js')), 'dist/lib/frames.js 未生成');
+  assert.ok(fs.existsSync(path.join(dist, 'lib', 'select-match.js')), 'dist/lib/select-match.js 未生成');
+
+  const banned = [
+    /<script[^>]+src\s*=\s*["']https?:/i,
+    /<link[^>]+href\s*=\s*["']https?:/i,
+    /import\s*\(\s*["']https?:/i,
+    /importScripts\s*\(\s*["']https?:/i,
+    /@import\s+(?:url\()?\s*["']?https?:/i,
+    /url\(\s*["']?https?:/i,
+    /https?:\/\/[^\s"'`)<>]+\.(?:js|mjs|css|woff2?|ttf|eot|png|jpe?g|gif|svg|webp)\b/i
+  ];
+
+  const offenders = [];
+  for (const file of walk(dist)) {
+    const rel = path.relative(dist, file).split(path.sep).join('/');
+    if (rel.startsWith('vendor/')) continue; // 第三方本地库，单独审计
+    if (!/\.(js|mjs|html|json|css)$/i.test(rel)) continue;
+    const content = fs.readFileSync(file, 'utf8');
+    for (const pattern of banned) {
+      const match = pattern.exec(content);
+      if (match) offenders.push(`${rel}: ${match[0].slice(0, 80)}`);
+    }
+  }
+  assert.deepEqual(offenders, [], 'dist 里出现了远程资源引用：\n' + offenders.join('\n'));
+});

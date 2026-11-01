@@ -148,6 +148,21 @@
 
   /* -------------------------------------------------------- content 注入 */
 
+  /**
+   * 与 manifest.content_scripts[0].js 严格同序（新注入时按依赖顺序加载）。
+   * 迭代 5 新增 select-match / shadow / frames 三个 lib。
+   */
+  var CONTENT_FILES = [
+    'lib/resume-schema.js',
+    'lib/rules.js',
+    'lib/field-matcher.js',
+    'lib/select-match.js',
+    'lib/shadow.js',
+    'lib/frames.js',
+    'lib/learner.js',
+    'content/content.js'
+  ];
+
   async function ensureContentScript(tabId) {
     try {
       var pong = await chrome.tabs.sendMessage(tabId, { type: 'JC_PING' });
@@ -158,17 +173,61 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        files: [
-          'lib/resume-schema.js',
-          'lib/rules.js',
-          'lib/field-matcher.js',
-          'lib/learner.js',
-          'content/content.js'
-        ]
+        files: CONTENT_FILES.slice()
       });
       return true;
     } catch (e) {
       return false;
+    }
+  }
+
+  /**
+   * 取当前标签页所有可注入的 frame：{frameId, url}。
+   * executeScript(allFrames) 返回 [{frameId, result}]，result 是各 frame 的 location.href。
+   * about:blank / data: 这类 frame 过滤掉；整体失败时回退到主 frame，仍然走广播流程。
+   */
+  async function frameTargets(tabId) {
+    var list = [];
+    try {
+      var injected = await chrome.scripting.executeScript({
+        target: { tabId: tabId, allFrames: true },
+        func: function () {
+          return location.href;
+        }
+      });
+      var seen = {};
+      for (var i = 0; i < (injected || []).length; i++) {
+        var item = injected[i] || {};
+        var url = typeof item.result === 'string' ? item.result : '';
+        if (!isInjectableUrl(url)) continue;
+        if (seen[item.frameId]) continue;
+        seen[item.frameId] = true;
+        list.push({ frameId: typeof item.frameId === 'number' ? item.frameId : 0, url: url });
+      }
+    } catch (e) {
+      list = [];
+    }
+    if (list.length) return list;
+    return [{ frameId: 0, url: activeUrl || '' }];
+  }
+
+  /**
+   * 向指定 frame 发消息；抛错（content script 没注入到该 frame）时补注入一次再重试。
+   * 仍失败则返回 {ok:false, error}，由 mergeFrameResults 标为该 frame failed，不影响整体。
+   */
+  async function sendToFrame(tabId, frameId, message) {
+    try {
+      return await chrome.tabs.sendMessage(tabId, message, { frameId: frameId });
+    } catch (e) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tabId, frameIds: [frameId] },
+          files: CONTENT_FILES.slice()
+        });
+        return await chrome.tabs.sendMessage(tabId, message, { frameId: frameId });
+      } catch (e2) {
+        return { ok: false, error: String((e2 && e2.message) || e2 || e) };
+      }
     }
   }
 
@@ -238,6 +297,13 @@
         });
         li.appendChild(toggle);
       }
+      // 迭代 5：来自 Shadow DOM 的命中给一个纯文案角标
+      if (item.shadow) {
+        var badge = document.createElement('span');
+        badge.className = 'ri-tag';
+        badge.textContent = ' shadow';
+        li.appendChild(badge);
+      }
       els.filledList.appendChild(li);
     });
     setText(els.filledTitle, '已填 ' + list.length + ' 项');
@@ -258,6 +324,14 @@
       label.className = 'mr-label';
       label.textContent = item.label;
       row.appendChild(label);
+
+      // 跨 frame 同 key 只显示一次，但标出来自哪些 frame
+      if (item.frames && item.frames.length > 1) {
+        var fromFrames = document.createElement('span');
+        fromFrames.className = 'mr-frames';
+        fromFrames.textContent = '（' + item.frames.join('、') + '）';
+        row.appendChild(fromFrames);
+      }
 
       var input = document.createElement('input');
       input.type = 'text';
@@ -484,16 +558,19 @@
       return { ok: true, pageFilled: false, error: '已保存到简历，但没有可填充的标签页' };
     }
 
-    var res;
-    try {
-      res = await chrome.tabs.sendMessage(activeTabId, instruction);
-    } catch (e) {
-      res = { ok: false, error: String((e && e.message) || e) };
+    // 迭代 5：多 frame 页面里字段可能在任意 iframe，逐个试，第一个成功即止
+    var targets = await frameTargets(activeTabId);
+    var lastError = '';
+    for (var i = 0; i < targets.length; i++) {
+      var res = await sendToFrame(activeTabId, targets[i].frameId, instruction);
+      if (res && res.ok) return { ok: true, pageFilled: true };
+      lastError = (res && res.error) || lastError;
     }
-    if (!res || !res.ok) {
-      return { ok: true, pageFilled: false, error: '已保存到简历，页面填充失败：' + ((res && res.error) || '未知错误') };
-    }
-    return { ok: true, pageFilled: true };
+    return {
+      ok: true,
+      pageFilled: false,
+      error: '已保存到简历，页面填充失败：' + (lastError || '所有 frame 都没有找到这个字段')
+    };
   }
 
   /** 补填成功后把报告里的这一项从「待填」挪到「已填」 */
@@ -518,6 +595,16 @@
 
   /* -------------------------------------------------------------- 一键填充 */
 
+  /** 简历 key → 值，交给 buildReportFromPlan 渲染「未匹配」区块的值 */
+  function buildResumeValueMap() {
+    var map = {};
+    var keys = fieldKeys();
+    for (var i = 0; i < keys.length; i++) {
+      map[keys[i]] = window.JC.resolveValue(resume, keys[i]);
+    }
+    return map;
+  }
+
   async function handleFill() {
     if (busy) return;
     if (!window.JC.hasAnyData(resume)) {
@@ -534,31 +621,62 @@
       if (!tab) return;
 
       var rulesBag = await window.JC.getRules();
-      var res = await chrome.tabs.sendMessage(tab.id, {
-        type: 'JC_FILL',
-        resume: resume,
-        rules: rulesBag.fieldRules || [],
-        url: tab.url
+      var targets = await frameTargets(tab.id);
+      var results = [];
+      var ruleHits = [];
+
+      // 逐 frame 发送，单个 frame 失败只标 failed，不影响其它 frame
+      for (var i = 0; i < targets.length; i++) {
+        var res = await sendToFrame(tab.id, targets[i].frameId, {
+          type: 'JC_FILL',
+          resume: resume,
+          rules: rulesBag.fieldRules || [],
+          url: tab.url
+        });
+        results.push({ frameId: targets[i].frameId, url: targets[i].url, result: res });
+        if (res && Array.isArray(res.ruleHits)) {
+          for (var h = 0; h < res.ruleHits.length; h++) {
+            if (ruleHits.indexOf(res.ruleHits[h]) === -1) ruleHits.push(res.ruleHits[h]);
+          }
+        }
+      }
+
+      var merged = window.JC.mergeFrameResults(results, {});
+      var okFrames = merged.frames.filter(function (frame) {
+        return frame.ok;
       });
-      if (!res || !res.ok) {
-        showResult('error', '填充失败', (res && res.error) || '未知错误');
+      if (!okFrames.length) {
+        showResult('error', '填充失败', '所有 frame 都没有响应，请刷新页面后重试。');
         return;
       }
 
       // popup 负责落盘命中计数，content script 不直接碰存储
-      if (res.ruleHits && res.ruleHits.length) {
+      if (ruleHits.length) {
         try {
-          await window.JC.bumpRuleHits(res.ruleHits);
+          await window.JC.bumpRuleHits(ruleHits);
         } catch (e) {
           /* 计数失败不影响本次填充结果 */
         }
       }
 
-      var report = window.JC.reportFromFillResult(res, { url: tab.url, scanned: res.scanned });
+      var report = window.JC.buildReportFromPlan(merged, buildResumeValueMap(), {
+        url: tab.url,
+        scanned: merged.scanned
+      });
       renderReport(report);
-      showResult('ok', '已填 ' + report.counts.filled + ' 项', report.counts.missing || report.counts.unmatched
-        ? '待填 ' + report.counts.missing + ' 项、未匹配 ' + report.counts.unmatched + ' 项，见下方报告。'
-        : '简历里的字段这一页都填上了。');
+
+      var frameText = '扫描 ' + merged.frames.length + ' 个 frame';
+      if (merged.empty) {
+        showResult('error', '未发现可填字段', frameText + '（主页面 + iframe），没有找到可见可填的输入框。');
+      } else {
+        showResult(
+          'ok',
+          '已填 ' + report.counts.filled + ' 项 · ' + frameText,
+          report.counts.missing || report.counts.unmatched
+            ? '待填 ' + report.counts.missing + ' 项、未匹配 ' + report.counts.unmatched + ' 项，见下方报告。'
+            : '简历里的字段这一页都填上了。'
+        );
+      }
 
       // 没当场补的待填项挂到 pendingItems，跨页面/跨会话携带
       if (report.missing.length) {
@@ -619,7 +737,8 @@
 
       var label = document.createElement('div');
       label.className = 'li-label';
-      label.textContent = entry.label || entry.selector || '（无标签字段）';
+      var prefix = entry.frameLabel ? entry.frameLabel + ' · ' : '';
+      label.textContent = prefix + (entry.label || entry.selector || '（无标签字段）');
       item.appendChild(label);
 
       var meta = document.createElement('div');
@@ -656,23 +775,32 @@
     if (busy) return;
     busy = true;
     els.learnBtn.disabled = true;
-    showResult('ok', '正在扫描当前页…', '只列出可见、可填的 input / textarea / select。');
+    showResult('ok', '正在扫描当前页…', '只列出可见、可填的 input / textarea / select（含 iframe / Shadow DOM）。');
 
     try {
       var tab = await prepareTab();
       if (!tab) return;
 
-      var res = await chrome.tabs.sendMessage(tab.id, { type: 'JC_SCAN_FIELDS' });
-      if (!res || !res.ok) {
-        showResult('error', '扫描失败', (res && res.error) || 'content script 没有返回结果。');
-        return;
+      var targets = await frameTargets(tab.id);
+      learnEntries = [];
+      var framesWithFields = 0;
+
+      // 迭代 5：逐 frame 扫描，每个 frame 的 entries 打上 frameLabel 后合并
+      for (var i = 0; i < targets.length; i++) {
+        var res = await sendToFrame(tab.id, targets[i].frameId, { type: 'JC_SCAN_FIELDS' });
+        if (!res || !res.ok || !Array.isArray(res.entries) || !res.entries.length) continue;
+        framesWithFields++;
+        var label = window.JC.frameLabel(res.frameUrl || res.url || targets[i].url);
+        var tagged = window.JC.tagEntriesWithFrame(res.entries, label);
+        learnEntries = learnEntries.concat(tagged);
       }
-      learnEntries = Array.isArray(res.entries) ? res.entries : [];
-      learnHost = hostOf(res.url || tab.url);
+
+      // 保存规则仍用主 frame 的 host 作 sitePattern（子 frame 多为第三方域名）
+      learnHost = hostOf(tab.url);
 
       if (!learnEntries.length) {
         els.learnPanel.hidden = true;
-        showResult('error', '没有可学习的字段', '这个页面没有可见的 input / textarea / select。');
+        showResult('error', '没有可学习的字段', '这个页面（含 iframe）没有可见的 input / textarea / select。');
         return;
       }
 
@@ -680,8 +808,20 @@
       els.learnScope.checked = Boolean(learnHost);
       renderLearnList();
       els.learnPanel.hidden = false;
-      showLearnStatus('扫描到 ' + learnEntries.length + ' 个字段，选好后点「保存规则」。');
-      showResult('ok', '扫描到 ' + learnEntries.length + ' 个字段', '在下方给每个字段选目标，或保持「忽略」。');
+
+      if (framesWithFields > 1) {
+        showLearnStatus(
+          '共 ' + framesWithFields + ' 个 frame、' + learnEntries.length + ' 个字段，选好后点「保存规则」。'
+        );
+        showResult(
+          'ok',
+          '扫描到 ' + learnEntries.length + ' 个字段（' + framesWithFields + ' 个 frame）',
+          '列表里每项都标了来源 frame；在下方给每个字段选目标，或保持「忽略」。'
+        );
+      } else {
+        showLearnStatus('扫描到 ' + learnEntries.length + ' 个字段，选好后点「保存规则」。');
+        showResult('ok', '扫描到 ' + learnEntries.length + ' 个字段', '在下方给每个字段选目标，或保持「忽略」。');
+      }
     } catch (e) {
       showResult('error', '扫描出错', String((e && e.message) || e));
     } finally {

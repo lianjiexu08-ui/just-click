@@ -54,6 +54,9 @@ test('content script 存在且加载顺序正确', () => {
     'lib/resume-schema.js',
     'lib/rules.js',
     'lib/field-matcher.js',
+    'lib/select-match.js',
+    'lib/shadow.js',
+    'lib/frames.js',
     'lib/learner.js',
     'content/content.js'
   ];
@@ -62,6 +65,23 @@ test('content script 存在且加载顺序正确', () => {
     expected,
     `content_scripts 顺序错误：${scripts.join(' → ')}`
   );
+});
+
+test('迭代 5：content script 注入所有 frame，匹配范围不变', () => {
+  const cs = manifest.content_scripts[0];
+  assert.equal(cs.all_frames, true, 'iframe 表单要求 all_frames: true');
+  assert.deepEqual(cs.matches, ['http://*/*', 'https://*/*'], 'matches 不能因 all_frames 变化');
+  assert.equal(cs.run_at, 'document_idle');
+  assert.deepEqual(manifest.permissions, ['storage', 'activeTab', 'scripting'], '不能新增权限');
+});
+
+test('迭代 5：shadow / frames 两个新库可被页面加载', () => {
+  const resources = (manifest.web_accessible_resources || []).flatMap((bundle) => bundle.resources || []);
+  for (const file of ['lib/shadow.js', 'lib/frames.js']) {
+    assert.ok(resources.includes(file), `web_accessible_resources 缺少 ${file}`);
+    assert.ok(manifest.content_scripts[0].js.includes(file), `content_scripts 缺少 ${file}`);
+    assert.ok(fs.existsSync(srcFile(file)), `${file} 不存在`);
+  }
 });
 
 test('content script 的匹配范围覆盖 http/https', () => {

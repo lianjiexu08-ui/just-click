@@ -110,11 +110,15 @@ async function validateManifest() {
     for (const res of bundle.resources || []) await checkRef(res, 'manifest.web_accessible_resources');
   }
 
-  // content script 有严格加载顺序：schema → rules → matcher → learner → content
+  // content script 有严格加载顺序：schema → rules → matcher → select-match → shadow → frames → learner → content
+  // 迭代 5：新增 select-match / shadow / frames 三个 lib（顺序与 manifest 严格一致）
   const expectedOrder = [
     'lib/resume-schema.js',
     'lib/rules.js',
     'lib/field-matcher.js',
+    'lib/select-match.js',
+    'lib/shadow.js',
+    'lib/frames.js',
     'lib/learner.js',
     'content/content.js'
   ];

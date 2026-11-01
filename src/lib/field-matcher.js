@@ -217,8 +217,75 @@
       { t: '简介', w: 0.8 },
       { t: '工作经历', w: 1.0 },
       { t: '经历', w: 0.8 }
+    ],
+
+    // ---- 迭代 5：中国求职站点的六组预置字段 ----
+    // 直接进 DICTIONARY，不再受 options.fieldKeys 门禁限制：中文 label 只要出现
+    // 这些词就能命中。反硬编码红线靠「表里只有这六个 key」守住 —— 用户自建的
+    // 任意 key（如 wechat）不在表里，任何情况下都不会被字典命中，只能靠用户规则。
+    expected_salary: [
+      { t: '期望薪资', w: 2.6 },
+      { t: '期望月薪', w: 2.6 },
+      { t: '薪资', w: 2.4 },
+      { t: '薪酬', w: 2.4 },
+      { t: '月薪', w: 2.4 },
+      { t: '年薪', w: 2.2 },
+      { t: '待遇', w: 1.8 },
+      { t: 'expectedsalary', w: 2.2 }
+    ],
+    available_date: [
+      { t: '到岗时间', w: 2.6 },
+      { t: '入职时间', w: 2.6 },
+      { t: '上岗时间', w: 2.6 },
+      { t: '到岗', w: 2.4 },
+      { t: '可到岗', w: 2.4 },
+      { t: '上岗', w: 2.2 },
+      { t: 'availabledate', w: 2.2 },
+      { t: 'noticeperiod', w: 1.8 }
+    ],
+    education: [
+      { t: '最高学历', w: 2.6 },
+      { t: '学历', w: 2.4 },
+      { t: '教育程度', w: 2.4 },
+      { t: '学位', w: 2.2 },
+      { t: 'education', w: 2.2 },
+      { t: 'degree', w: 2.2 }
+    ],
+    school: [
+      { t: '毕业院校', w: 2.6 },
+      { t: '毕业学校', w: 2.6 },
+      { t: '学校', w: 2.2 },
+      { t: '院校', w: 2.2 },
+      { t: 'school', w: 2.2 }
+    ],
+    major: [
+      { t: '所学专业', w: 2.6 },
+      { t: '专业方向', w: 2.4 },
+      { t: '专业', w: 2.2 },
+      { t: '方向', w: 1.6 },
+      { t: 'major', w: 2.2 }
+    ],
+    experience_years: [
+      { t: '工作年限', w: 2.6 },
+      { t: '工作经验', w: 2.4 },
+      { t: '从业年限', w: 2.4 },
+      { t: '年经验', w: 2.2 },
+      { t: '工龄', w: 2.2 },
+      { t: 'experienceyears', w: 2.2 },
+      { t: 'workyears', w: 2.2 }
     ]
   };
+
+  /**
+   * 兼容导出：迭代 5 早期版本把六组中文词条放在独立的 PRESET_DICTIONARY，
+   * 外部代码可能还在引用。现在它们已经是 DICTIONARY 的一部分，这里保留同名
+   * 视图并指向**同一数组引用**，避免两份词库漂移。
+   */
+  var PRESET_KEYS = ['expected_salary', 'available_date', 'education', 'school', 'major', 'experience_years'];
+  var PRESET_DICTIONARY = {};
+  for (var presetIndex = 0; presetIndex < PRESET_KEYS.length; presetIndex++) {
+    PRESET_DICTIONARY[PRESET_KEYS[presetIndex]] = DICTIONARY[PRESET_KEYS[presetIndex]];
+  }
 
   /**
    * 负向词：某个来源文本里出现这些片段时，该来源对对应 key 直接作废。
@@ -235,7 +302,14 @@
     linkedin: [],
     github: [],
     website: [],
-    summary: ['jobtitle', 'position', '职位']
+    summary: ['jobtitle', 'position', '职位'],
+    // 迭代 5：预置字段的负向词，避免「当前薪资」被当成期望薪资、「技能」被当成专业
+    expected_salary: ['现有', '当前', 'current', 'present'],
+    available_date: [],
+    education: ['学校', '院校', '专业'],
+    school: ['学历', '专业'],
+    major: ['技能', '项目', '公司'],
+    experience_years: []
   };
 
   /** 整段直接跳过的字段（这些不是我们要填的东西） */
@@ -259,9 +333,65 @@
 
   /**
    * ATS 适配表：已知结构的精确匹配，命中即 confidence = 1。
-   * attr 支持 id / name / dataAutomationId。
+   * attr 支持 id / name / dataAutomationId / placeholder / ariaLabel / containerClass。
+   *
+   * 迭代 5：中国五站规则与通用 ATS 规则**在同一个数组里**，中国站点排在前部，
+   * 保证优先于 Greenhouse / Lever / Workday。站点规则带 sites 字段做 host 隔离，
+   * 只有当前 url 命中对应域名才可生效；没有 sites 的规则不受 host 限制。
+   *
+   * 注意：以下中国站点规则来自公开 DOM 结构的推断，**未在真实登录态回归**，
+   * 真实站点改版后需要按实际 DOM 校正 pattern。
    */
   var ATS_RULES = [
+    // ---- Boss 直聘（快速投递弹窗 .dialog-wrap）----
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'name', pattern: 'geekName', key: 'fullName', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'name', pattern: 'geekMobile', key: 'phone', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'name', pattern: 'mobile', key: 'phone', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'name', pattern: 'phone', key: 'phone', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'name', pattern: 'name', key: 'fullName', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'name', pattern: 'email', key: 'email', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'placeholder', pattern: '请输入姓名', key: 'fullName', exact: true },
+    { ats: 'zhipin', sites: ['zhipin.com'], attr: 'placeholder', pattern: '请输入手机号', key: 'phone', exact: true },
+
+    // ---- 智联招聘 ----
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'name', pattern: 'userName', key: 'fullName', exact: true },
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'id', pattern: 'resumeName', key: 'fullName', exact: true },
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'name', pattern: 'realName', key: 'fullName', exact: true },
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'name', pattern: 'mobile', key: 'phone', exact: true },
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'name', pattern: 'phone', key: 'phone', exact: true },
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'name', pattern: 'email', key: 'email', exact: true },
+    { ats: 'zhaopin', sites: ['zhaopin.com'], attr: 'id', pattern: 'email', key: 'email', exact: true },
+
+    // ---- 前程无忧 51job ----
+    { ats: '51job', sites: ['51job.com'], attr: 'id', pattern: 'inputRealName', key: 'fullName', exact: true },
+    { ats: '51job', sites: ['51job.com'], attr: 'name', pattern: 'userName', key: 'fullName', exact: true },
+    { ats: '51job', sites: ['51job.com'], attr: 'name', pattern: 'mobilePhone', key: 'phone', exact: true },
+    { ats: '51job', sites: ['51job.com'], attr: 'id', pattern: 'mobile', key: 'phone', exact: true },
+    { ats: '51job', sites: ['51job.com'], attr: 'name', pattern: 'mobile', key: 'phone', exact: true },
+    { ats: '51job', sites: ['51job.com'], attr: 'name', pattern: 'email', key: 'email', exact: true },
+
+    // ---- 拉勾 ----
+    { ats: 'lagou', sites: ['lagou.com'], attr: 'name', pattern: 'userName', key: 'fullName', exact: true },
+    { ats: 'lagou', sites: ['lagou.com'], attr: 'name', pattern: 'phone', key: 'phone', exact: true },
+    { ats: 'lagou', sites: ['lagou.com'], attr: 'name', pattern: 'mobile', key: 'phone', exact: true },
+    {
+      ats: 'lagou',
+      sites: ['lagou.com'],
+      attr: 'placeholder',
+      pattern: '请输入手机号',
+      key: 'phone',
+      exact: true
+    },
+    { ats: 'lagou', sites: ['lagou.com'], attr: 'name', pattern: 'email', key: 'email', exact: true },
+
+    // ---- 猎聘 ----
+    // 注意：猎聘用 id=name 表示真实姓名，Lever 用裸 name 表示姓名，两者靠 sites 隔离 + 通用规则在后
+    { ats: 'liepin', sites: ['liepin.com'], attr: 'name', pattern: 'realName', key: 'fullName', exact: true },
+    { ats: 'liepin', sites: ['liepin.com'], attr: 'id', pattern: 'name', key: 'fullName', exact: true },
+    { ats: 'liepin', sites: ['liepin.com'], attr: 'name', pattern: 'mobile', key: 'phone', exact: true },
+    { ats: 'liepin', sites: ['liepin.com'], attr: 'name', pattern: 'phone', key: 'phone', exact: true },
+    { ats: 'liepin', sites: ['liepin.com'], attr: 'name', pattern: 'email', key: 'email', exact: true },
+
     // ---- Greenhouse ----
     { ats: 'greenhouse', attr: 'id', pattern: 'first_name', key: 'firstName', exact: true },
     { ats: 'greenhouse', attr: 'id', pattern: 'last_name', key: 'lastName', exact: true },
@@ -294,6 +424,39 @@
     { ats: 'workday', attr: 'dataAutomationId', pattern: 'website', key: 'website', exact: true }
   ];
 
+  /**
+   * 兼容导出：迭代 5 早期版本把中国五站规则单独放在 SITE_RULES。
+   * 现在它们已并入 ATS_RULES，这里保留为派生视图（同一批对象引用），导出名不变。
+   */
+  var SITE_RULES = ATS_RULES.filter(function (rule) {
+    return Array.isArray(rule.sites) && rule.sites.length > 0;
+  });
+
+  /**
+   * 域名后缀匹配：www.zhipin.com 命中 zhipin.com；zhipin.com.evil.com 不命中。
+   * 非 http(s) / 空 url / 空 sites 一律 false（宁可不匹配，也不跨站误用规则）。
+   */
+  function hostMatches(url, sites) {
+    if (typeof url !== 'string' || !url) return false;
+    if (!Array.isArray(sites) || !sites.length) return false;
+    var host = '';
+    try {
+      host = String(new URL(url).hostname || '').toLowerCase();
+    } catch (e) {
+      var m = /^[a-z][a-z0-9+.-]*:\/\/([^/?#:]+)/i.exec(url);
+      if (!m) return false;
+      host = m[1].toLowerCase();
+    }
+    if (!host) return false;
+    for (var i = 0; i < sites.length; i++) {
+      var site = typeof sites[i] === 'string' ? sites[i].trim().toLowerCase().replace(/^\.+/, '') : '';
+      if (!site) continue;
+      if (host === site) return true;
+      if (host.length > site.length && host.slice(-(site.length + 1)) === '.' + site) return true;
+    }
+    return false;
+  }
+
   /** 归一化：小写、去掉空白与标点、保留中日韩字符与数字 */
   function normalizeText(value) {
     if (typeof value !== 'string') return '';
@@ -305,8 +468,11 @@
 
   // ATS 规则里的 pattern 写的是「人看的形态」（job_application[email]、urls[LinkedIn]），
   // 这里预归一化一份，匹配时与归一化后的属性值比较。normalizeText 是函数声明，已提升。
+  // SITE_RULES 是 ATS_RULES 的派生视图，引用同一批对象，不需要再跑一遍。
   for (var ruleIndex = 0; ruleIndex < ATS_RULES.length; ruleIndex++) {
-    ATS_RULES[ruleIndex].normPattern = normalizeText(ATS_RULES[ruleIndex].pattern);
+    var atsRule = ATS_RULES[ruleIndex];
+    atsRule.normPattern = normalizeText(atsRule.pattern);
+    if (atsRule.containerClass) atsRule.normContainer = normalizeText(atsRule.containerClass);
   }
 
   /** 把 descriptor 里所有可用文本来源抽成 [{attr, text, norm}] */
@@ -315,6 +481,8 @@
     var out = [];
     var ATTR_MAP = [
       ['label', desc.labelText],
+      // 迭代 5：调用方直接给出 label 时同样按 label 权重参与匹配
+      ['label', desc.label],
       ['ariaLabel', desc.ariaLabel],
       ['placeholder', desc.placeholder],
       ['nearby', desc.nearbyText],
@@ -354,22 +522,48 @@
     return containsAny(haystack, GLOBAL_REJECTS);
   }
 
-  /** 命中 ATS 精确规则时返回 key，否则 null */
-  function matchAts(desc) {
+  /** 单条 ATS / 站点规则是否命中某个 descriptor */
+  function ruleHits(rule, attrValue, desc) {
+    if (rule.normContainer) {
+      var container = normalizeText(desc.containerClass || '');
+      if (!container || container.indexOf(rule.normContainer) === -1) return false;
+    }
+    var value = attrValue[rule.attr];
+    if (!value) return false;
+    return rule.exact ? value === rule.normPattern : value.indexOf(rule.normPattern) !== -1;
+  }
+
+  /**
+   * 命中 ATS / 站点精确规则时返回 key，否则 null。
+   *
+   * 迭代 5：只遍历 ATS_RULES 一张表（中国五站规则排在前部）。规则带 sites 时
+   * 必须 hostMatches(opts.url, rule.sites) 才可命中；没有 sites 的通用规则不受
+   * host 限制。不传 url 时站点规则一律跳过 —— 保证 matchAts(desc) 向后兼容。
+   */
+  function matchAts(desc, options) {
     if (!desc) return null;
+    var opts = options || {};
     var attrValue = {
       id: normalizeText(desc.id || ''),
       name: normalizeText(desc.name || ''),
-      dataAutomationId: normalizeText(desc.dataAutomationId || '')
+      dataAutomationId: normalizeText(desc.dataAutomationId || ''),
+      placeholder: normalizeText(desc.placeholder || ''),
+      ariaLabel: normalizeText(desc.ariaLabel || ''),
+      containerClass: normalizeText(desc.containerClass || '')
     };
+    var hasUrl = typeof opts.url === 'string' && opts.url;
+
     for (var i = 0; i < ATS_RULES.length; i++) {
       var rule = ATS_RULES[i];
-      var value = attrValue[rule.attr];
-      if (!value) continue;
-      var hit = rule.exact ? value === rule.normPattern : value.indexOf(rule.normPattern) !== -1;
-      if (hit) {
-        return { key: rule.key, ats: rule.ats, pattern: rule.pattern, attr: rule.attr };
+      // 站点规则：host 不命中就跳过；没有 sites 的规则不受 host 限制
+      if (Array.isArray(rule.sites) && rule.sites.length) {
+        if (!hasUrl || !hostMatches(opts.url, rule.sites)) continue;
       }
+      if (!ruleHits(rule, attrValue, desc)) continue;
+      var hit = { key: rule.key, ats: rule.ats, pattern: rule.pattern, attr: rule.attr };
+      // 只有站点规则命中才附带 site，通用规则保持既有响应结构
+      if (Array.isArray(rule.sites) && rule.sites.length) hit.site = rule.sites[0];
+      return hit;
     }
     return null;
   }
@@ -404,9 +598,9 @@
       }
     }
 
-    var ats = matchAts(desc);
+    var ats = matchAts(desc, opts);
     if (ats) {
-      return {
+      var atsHit = {
         key: ats.key,
         confidence: 1,
         score: MAX_SCORE,
@@ -414,23 +608,37 @@
         token: ats.pattern,
         ats: ats.ats
       };
+      // 只有站点规则命中才附带 site，保证既有 ATS 响应结构不变
+      if (ats.site) atsHit.site = ats.site;
+      return atsHit;
     }
 
     var sources = collectSources(desc);
     if (!sources.length) return null;
 
+    // 迭代 5：取消 fieldKeys 门禁 —— 内置 key + DICTIONARY 里全部 key 都参与匹配。
+    // 反硬编码红线不放松：DICTIONARY 只有上面固定的那些 key，任意用户自建 key
+    // （如 wechat）不在这里，也就永远不可能被字典命中，只能靠用户规则。
+    var candidateKeys = FIELD_KEYS.slice();
+    var dictionaryKeys = Object.keys(DICTIONARY);
+    for (var d = 0; d < dictionaryKeys.length; d++) {
+      if (candidateKeys.indexOf(dictionaryKeys[d]) === -1) candidateKeys.push(dictionaryKeys[d]);
+    }
+
     var best = null;
     for (var s = 0; s < sources.length; s++) {
       var src = sources[s];
       var attrWeight = ATTR_WEIGHTS[src.attr] || 1;
-      for (var k = 0; k < FIELD_KEYS.length; k++) {
-        var key = FIELD_KEYS[k];
-        // 字典只覆盖内置 key：自定义 key 没有词库，只能靠用户规则命中。
+      for (var k = 0; k < candidateKeys.length; k++) {
+        var key = candidateKeys[k];
+        // 字典只覆盖固定 key：任意自建 key 没有词库，只能靠用户规则命中。
         // 这条 if 是「禁止把自定义 key 硬编码进字典」的运行时保险。
-        if (!Object.prototype.hasOwnProperty.call(DICTIONARY, key)) continue;
+        var dictionary = null;
+        if (Object.prototype.hasOwnProperty.call(DICTIONARY, key)) dictionary = DICTIONARY[key];
+        if (!dictionary) continue;
         var rejects = REJECTS[key] || [];
         if (rejects.length && containsAny(src.norm, rejects)) continue;
-        var tokens = DICTIONARY[key] || [];
+        var tokens = dictionary;
         for (var t = 0; t < tokens.length; t++) {
           var token = tokens[t];
           if (src.norm.indexOf(token.t) === -1) continue;
@@ -498,10 +706,63 @@
     return out;
   }
 
+  /**
+   * 迭代 5 别名：模板里的预置 key 是 degree / work_years，canonical 是
+   * education / experience_years。优先复用 resume-schema 导出的 FIELD_KEY_ALIASES
+   * （浏览器里 resume-schema 先加载并挂到 JC 上），拿不到时退回同一张内置表。
+   */
+  var FALLBACK_KEY_ALIASES = {
+    education: ['degree'],
+    degree: ['education'],
+    experience_years: ['work_years'],
+    work_years: ['experience_years']
+  };
+
+  function keyAliasTable() {
+    if (typeof globalThis !== 'undefined' && globalThis.JC && globalThis.JC.FIELD_KEY_ALIASES) {
+      return globalThis.JC.FIELD_KEY_ALIASES;
+    }
+    if (typeof require === 'function') {
+      try {
+        var schema = require('./resume-schema.js');
+        if (schema && schema.FIELD_KEY_ALIASES) return schema.FIELD_KEY_ALIASES;
+      } catch (e) {
+        /* ignore */
+      }
+    }
+    return FALLBACK_KEY_ALIASES;
+  }
+
+  function aliasesFor(key) {
+    var table = keyAliasTable();
+    var list = table && table[key];
+    return Array.isArray(list) ? list : [];
+  }
+
+  /** 取值：先取 key 本身，为空再按别名顺序回落 */
+  function valueForKey(values, key) {
+    var v = typeof values[key] === 'string' ? values[key].trim() : '';
+    if (v) return v;
+    var aliases = aliasesFor(key);
+    for (var i = 0; i < aliases.length; i++) {
+      var aliasValue = typeof values[aliases[i]] === 'string' ? values[aliases[i]].trim() : '';
+      if (aliasValue) return aliasValue;
+    }
+    return '';
+  }
+
   function labelForOption(key, options) {
     var labels = options && options.fieldLabels ? options.fieldLabels : null;
     if (labels && typeof labels[key] === 'string' && labels[key]) return labels[key];
     if (Object.prototype.hasOwnProperty.call(FIELD_LABELS, key)) return FIELD_LABELS[key];
+    // 页面用 canonical key（education / experience_years），简历里只有别名 key
+    // （degree / work_years）时，展示名回落到别名，避免 missing 里显示裸 key。
+    var aliases = aliasesFor(key);
+    for (var i = 0; i < aliases.length; i++) {
+      var alias = aliases[i];
+      if (labels && typeof labels[alias] === 'string' && labels[alias]) return labels[alias];
+      if (Object.prototype.hasOwnProperty.call(FIELD_LABELS, alias)) return FIELD_LABELS[alias];
+    }
     return key;
   }
 
@@ -525,7 +786,8 @@
     for (var i = 0; i < matches.length; i++) {
       var m = matches[i];
       if (seenIndex[m.index]) continue;
-      var value = typeof values[m.key] === 'string' ? values[m.key].trim() : '';
+      // 迭代 5：key 取不到值时用别名 key（education ↔ degree / experience_years ↔ work_years）
+      var value = valueForKey(values, m.key);
       var label = labelForOption(m.key, opts);
       if (!value) {
         // 页面上认出了字段，但简历里没写 -> 记为「缺数据」
@@ -534,6 +796,8 @@
       }
       seenIndex[m.index] = true;
       filledKeys[m.key] = true;
+      var mAliases = aliasesFor(m.key);
+      for (var ma = 0; ma < mAliases.length; ma++) filledKeys[mAliases[ma]] = true;
       var assignment = {
         index: m.index,
         key: m.key,
@@ -559,7 +823,8 @@
     var notFound = [];
     for (var j = 0; j < dynamicKeys.length; j++) {
       var key = dynamicKeys[j];
-      var v = typeof values[key] === 'string' ? values[key].trim() : '';
+      // key 或别名任一已填（filledKeys 同时标记了两边）都不再报 notFound
+      var v = valueForKey(values, key);
       if (v && !filledKeys[key]) {
         notFound.push({ key: key, label: labelForOption(key, opts) });
       }
@@ -576,9 +841,12 @@
     KEY_PRIORITY: KEY_PRIORITY,
     ATTR_WEIGHTS: ATTR_WEIGHTS,
     DICTIONARY: DICTIONARY,
+    PRESET_DICTIONARY: PRESET_DICTIONARY,
     REJECTS: REJECTS,
     GLOBAL_REJECTS: GLOBAL_REJECTS,
     ATS_RULES: ATS_RULES,
+    SITE_RULES: SITE_RULES,
+    hostMatches: hostMatches,
     normalizeText: normalizeText,
     resolveFieldKeys: resolveFieldKeys,
     collectSources: collectSources,

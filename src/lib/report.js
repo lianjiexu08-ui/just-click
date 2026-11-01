@@ -98,7 +98,11 @@
       var a = assignments[i];
       if (!a || typeof a.key !== 'string') continue;
       filledKeys[a.key] = true;
-      report.filled.push(valueItem(a.key, a.label, a.value, max));
+      var filledItem = valueItem(a.key, a.label, a.value, max);
+      // 迭代 5：多 frame 合并 / Shadow DOM 命中的附加信息，有则原样带给 UI
+      if (a.shadow === true) filledItem.shadow = true;
+      if (Array.isArray(a.frames) && a.frames.length) filledItem.frames = a.frames.slice();
+      report.filled.push(filledItem);
     }
 
     for (var m = 0; m < missingRaw.length; m++) {
@@ -106,14 +110,18 @@
       if (!miss || typeof miss.key !== 'string') continue;
       if (filledKeys[miss.key] || seenMissing[miss.key]) continue;
       seenMissing[miss.key] = true;
-      report.missing.push({ key: miss.key, label: miss.label || miss.key });
+      var missingItem = { key: miss.key, label: miss.label || miss.key };
+      if (Array.isArray(miss.frames) && miss.frames.length) missingItem.frames = miss.frames.slice();
+      report.missing.push(missingItem);
     }
 
     for (var n = 0; n < notFoundRaw.length; n++) {
       var unf = notFoundRaw[n];
       if (!unf || typeof unf.key !== 'string') continue;
       if (filledKeys[unf.key]) continue;
-      report.unmatched.push(valueItem(unf.key, unf.label, values[unf.key], max));
+      var unmatchedItem = valueItem(unf.key, unf.label, values[unf.key], max);
+      if (Array.isArray(unf.frames) && unf.frames.length) unmatchedItem.frames = unf.frames.slice();
+      report.unmatched.push(unmatchedItem);
     }
 
     report.counts = {

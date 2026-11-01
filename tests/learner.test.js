@@ -66,7 +66,9 @@ test('验收 4：手写 DOM stub 扫描出字段清单并生成规则，忽略�
   assert.equal(entries[0].label, '期望薪资');
   assert.equal(entries[0].attrs.name, 'expected_salary');
   assert.equal(entries[0].selector, '#f1');
-  assert.equal(entries[0].suggestedKey, '', '自定义字段不该被字典猜出来');
+  // 0.6.1：expected_salary 已进 DICTIONARY（需求 B），学习流可以给出建议；
+  // 「任意自建 key 不被字典猜」的红线仍由 cn-sites / custom-fields 用 wechat 断言。
+  assert.equal(entries[0].suggestedKey, 'expected_salary', '预置字段应能被建议');
 
   assert.equal(entries[1].selector, '[name="cover_letter"]');
   assert.equal(entries[2].suggestedKey, 'email', '内置字段应给出建议');

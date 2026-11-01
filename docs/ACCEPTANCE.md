@@ -28,6 +28,8 @@ M.detectFieldType(tricky, { rules: [rule] }); // → { key: 'expected_salary', c
 - `M.ATS_RULES` 里没有 `target === 'expected_salary'` 的条目
 - `detectFieldType({name:'expected_salary'})` 在没有规则时返回 `null`（自定义 key 不能靠猜命中）
 
+> 以上是迭代 3 的历史结论。0.6.1 起 `expected_salary` 作为六组中文预置字段之一进入 `DICTIONARY`，本条不再成立；「任意自建 key 不被字典猜」的红线改用 `wechat` 举证，见「迭代 5 验收对照」。
+
 ## 测试计数
 
 | 文件 | 条数 | 说明 |
@@ -163,3 +165,45 @@ Node 里跑不出浏览器行为，见 `docs/MANUAL-TEST.md` 第 9–12 节：
 4. DevTools Network 里确认「简历文本只发往自己配置的 baseURL」、控制台搜不到 key。
 
 这四条没有自动断言，不在测试结论里冒充已验证。
+
+---
+
+# 迭代 5 验收对照（PRD「迭代 5：真实可用性」）
+
+六条全部来自 `PRD.md` 迭代 5 的「验收标准（全部必须）」。
+
+| # | 验收标准 | 自动证据（测试名） | 结果 |
+| --- | --- | --- | --- |
+| 1 | `manifest.all_frames=true`；popup 聚合多 frame 报告（两 frame 合并去重） | `tests/manifest.test.js` →「迭代 5：content script 注入所有 frame，匹配范围不变」；`tests/frames.test.js` →「两个 frame 合并：同 key 已填只保留 1 条…」「跨 frame 同 key missing 只 1 条…」 | 通过 |
+| 2 | shadow 遍历单测：嵌套 2 层可收集、路径可重建、password 在 shadow 内仍被排除 | `tests/shadow.test.js` →「两层嵌套 shadow 都能收集…」「resolvePath 能把 shadow 路径重新定位回同一个 stub 元素」「shadow 内的 type=password 被排除」 | 通过 |
+| 3 | 中国站点：五站规则在 `ATS_RULES` 内且每站 ≥3 条；Boss 弹窗 `name` / `phone` / `email` + zhipin url 判为 `zhipin`；五站各 ≥2 字段经 `buildFillPlan` 命中；六组中文词条在 `DICTIONARY` 内、不传 `options` 也能命中；`degree`/`work_years` 与 `education`/`experience_years` 双向别名 | `scripts/smoke.mjs` 场景 3（五站 `buildFillPlan` + 中文「期望薪资」）；`tests/cn-sites.test.js` →「五站规则已并入 ATS_RULES…」「Boss直聘：投递弹窗的 name / phone / email…」「每站 ≥2 个字段经 buildFillPlan…」「六组中文词条已进 DICTIONARY…」「用户原始探针…」「别名：简历里只有 degree…」 | 通过（`npm run smoke` EXIT=0，18 场景；cn-sites 17 条用例全绿） |
+| 4 | 既有 161 条不回归；新增 ≥ 15；`npm test` / `npm run smoke` / `npm run build` 全绿 | `npm test`：204 tests / 204 pass / 0 fail（相对 v0.6.0 的 197 条净增 7 条；相对 161 基线共 43 条）；`npm run smoke`：18 场景；`npm run build` EXIT=0 | 通过 |
+| 5 | build 后 grep dist 无 CDN / 远程 URL；all_frames 不改变 matches（仍 http/https） | `tests/pdf-vendor.test.js` →「迭代 5：dist 的 all_frames=true、包含 shadow/frames，且无远程资源引用」（判据见测试注释：只拦「会触发浏览器加载远程资源」的写法，允许 chrome-extension:// 与文案里的示例地址）；`tests/manifest.test.js` → matches 仍为两个 http(s) 通配 | 通过 |
+| 6 | options「从当前页学习」在多 frame 页面能列出子 frame 字段（标注 frame 域名） | `tests/frames.test.js` →「tagEntriesWithFrame 重排全局 index、打 frameLabel、保留 selector」；popup `handleLearn` 逐 frame 扫描并渲染「域名 · 字段」 | 通过（交互需人工按 MANUAL-TEST 第 14 节点一遍） |
+
+## 反硬编码红线的执行方式（0.6.1 语义）
+
+- 六组中文预置词条（`expected_salary / available_date / education / school / major / experience_years`）直接在 `DICTIONARY` 里；`PRESET_DICTIONARY` 只是指向同一批数组的兼容视图；
+- 匹配逻辑**不再有 `options.fieldKeys` 门禁**：`candidateKeys = FIELD_KEYS + Object.keys(DICTIONARY)` 去重，不传 options 也能命中中文 label；
+- 六组预置 key 仍**不是**内置 `FIELD_KEYS`（`M.FIELD_KEYS` / `S.FIELD_KEYS` 都不含），也不在 `ATS_RULES` 里；
+- 模板既有的 `degree` / `work_years` 是 `education` / `experience_years` 的取值别名（`FIELD_KEY_ALIASES`，`resolveValue` 与 `buildFillPlan` 双向回落）；
+- 任意自建 key（如 `wechat`）不在 `DICTIONARY`，在任何 `fieldKeys` / 站点 / 词库组合下都返回 `null`，只有用户规则能命中。
+
+## 测试计数
+
+| 文件 | 条数 | 说明 |
+| --- | --- | --- |
+| tests/shadow.test.js | 7 | 新增：两层嵌套 shadow、路径重建、password/hidden 排除、坏 path、nth-of-type |
+| tests/frames.test.js | 8 | 新增：跨 frame filled/missing/unmatched 去重、failed frame、empty、frameLabel、学习打标 |
+| tests/select-match.test.js | 8 | 新增：精确/包含/同义词/单字保护/精确优先 |
+| tests/cn-sites.test.js | 17 | 0.6.1 重写：五站规则并入 ATS_RULES、Boss 弹窗 name/phone/email、五站 buildFillPlan、六组无门禁词条、别名、站点隔离矩阵、wechat 红线、负向词 |
+| tests/manifest.test.js | 10 | 原有 8 条保留；content_scripts 顺序数组按迭代 5 更新；新增 all_frames / web_accessible 2 条 |
+| tests/pdf-vendor.test.js | 10 | 原有 9 条保留；新增 dist 的 all_frames / shadow+frames 产物 / 无远程资源引用 1 条；0.6.1 只同步版本断言 |
+| 迭代 1–4 其余 15 个文件 | 144 | 条数不变，全部通过；其中 custom-fields / learner 仅按 0.6.1 语义把失效的 expected_salary 断言换成 wechat 举证 |
+| **合计** | **204** | 0 fail |
+
+> 0.6.1 返修：`tests/cn-sites.test.js` 整体重写（10 → 17 条）；`tests/custom-fields.test.js`、`tests/learner.test.js` 只改因「六组词条进 DICTIONARY」而失效的断言（举证对象换成自建 key `wechat`）；`tests/pdf-vendor.test.js` 只把硬编码的 `0.6.0` 同步成 `0.6.1`。其余既有断言未改动。
+
+## 需要人工点一遍的部分（迭代 5）
+
+见 `docs/MANUAL-TEST.md` 第 13–16 节：真实 Greenhouse/Lever iframe 表单、Workday Shadow DOM 表单、五个国内站点的登录态投递弹窗、多 frame 学习列表。Node 测试用的是 stub DOM 与字段描述符，**不代表真实站点已逐站回归**。

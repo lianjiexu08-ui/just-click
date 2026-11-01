@@ -3,6 +3,12 @@
 /**
  * 自定义简历字段 + PRD 验收 1/2/3
  * 核心约束：自定义 key 只能靠用户规则命中，绝不能被硬编码进字典。
+ *
+ * 0.6.1 返修说明：需求 B 把六组中文预置词条（含 expected_salary）直接放进了
+ * DICTIONARY，并取消了 options.fieldKeys 门禁，所以原先用 expected_salary
+ * 举证「自定义 key 不被字典猜」的断言不再成立。这里把举证对象换成真正自建的
+ * key `wechat`（不在 DICTIONARY 里），并保留「expected_salary 不进 FIELD_KEYS /
+ * S.FIELD_KEYS / ATS_RULES」的断言；反硬编码红线的语义没有放松。
  */
 
 const test = require('node:test');
@@ -136,8 +142,11 @@ test('验收 1：添加「期望薪资」后，name=expected_salary 的模拟表
   const resume = customResume();
   const descriptors = [desc({ name: 'expected_salary', labelText: '期望薪资' })];
 
-  // 没有规则时，自定义 key 不在字典里，不能靠猜命中
-  assert.equal(M.detectFieldType(descriptors[0]), null, '自定义 key 不得被硬编码进字典');
+  // 迭代 5：期望薪资已是 DICTIONARY 的预置字段，不传 fieldKeys 也能被字典命中
+  assert.equal(M.detectFieldType(descriptors[0]).key, 'expected_salary');
+
+  // 反硬编码红线：真正自建的 key（wechat）仍然只能靠用户规则命中
+  assert.equal(M.detectFieldType({ labelText: '微信', name: 'wechat' }), null, '自建 key 不得被硬编码进字典');
 
   const rule = R.createRule({
     match: { attrs: ['name'], pattern: 'expected_salary', matchType: 'contains' },
@@ -160,33 +169,39 @@ test('验收 1：添加「期望薪资」后，name=expected_salary 的模拟表
   assert.equal(emptyPlan.notFound.find((item) => item.key === 'expected_salary').label, '期望薪资');
 });
 
-test('验收 2：用户规则覆盖内置字典误判（期望薪资被误判成电话）', () => {
+test('验收 2：用户规则覆盖内置字典（自建 key wechat 只能靠规则命中）', () => {
   const tricky = desc({
-    name: 'expected_salary',
-    labelText: '期望薪资（可接受电话沟通）'
+    name: 'wechat',
+    labelText: '微信（可接受电话沟通）'
   });
 
-  // 先证明这是「字典确实会判错」的用例，而不是自造一个本来就对的场景
+  // 先证明这是「字典确实会判错」的用例：wechat 没有词库，label 里的「电话」会被判成 phone
   const wrong = M.detectFieldType(tricky);
-  assert.ok(wrong, '基线应有字典误判');
+  assert.ok(wrong, '基线应有字典猜测');
   assert.equal(wrong.key, 'phone');
   assert.equal(wrong.ats, null, '基线来自字典而不是 ATS');
 
   const rule = R.createRule({
-    match: { attrs: ['name'], pattern: 'salary', matchType: 'contains' },
-    target: 'expected_salary',
+    match: { attrs: ['name'], pattern: 'wechat', matchType: 'contains' },
+    target: 'wechat',
     scope: { sitePattern: '' }
   });
   const hit = M.detectFieldType(tricky, { rules: [rule], url: 'https://jobs.example.com/apply' });
-  assert.equal(hit.key, 'expected_salary');
+  assert.equal(hit.key, 'wechat');
   assert.equal(hit.confidence, 1);
   assert.equal(hit.score, M.MAX_SCORE);
   assert.equal(hit.source, 'user-rule');
   assert.equal(hit.ruleId, rule.id);
   assert.equal(hit.ats, null);
 
-  // 核心验收：自定义 key 不能出现在词典 / 内置 key 列表 / ATS 规则里
-  assert.equal(Object.prototype.hasOwnProperty.call(M.DICTIONARY, 'expected_salary'), false);
+  // 核心验收：自建 key 不能出现在词典 / 内置 key 列表 / ATS 规则里
+  assert.equal(Object.prototype.hasOwnProperty.call(M.DICTIONARY, 'wechat'), false);
+  assert.equal(M.FIELD_KEYS.includes('wechat'), false);
+  assert.equal(S.FIELD_KEYS.includes('wechat'), false);
+  assert.equal(M.ATS_RULES.some((r) => r.key === 'wechat'), false);
+
+  // 迭代 5：expected_salary 允许出现在 DICTIONARY，但它仍然不是内置字段
+  assert.equal(Object.prototype.hasOwnProperty.call(M.DICTIONARY, 'expected_salary'), true);
   assert.equal(M.FIELD_KEYS.includes('expected_salary'), false);
   assert.equal(S.FIELD_KEYS.includes('expected_salary'), false);
   assert.equal(M.ATS_RULES.some((r) => r.key === 'expected_salary'), false);
@@ -194,12 +209,12 @@ test('验收 2：用户规则覆盖内置字典误判（期望薪资被误判成
 
 test('验收 3：禁用规则后回退内置行为', () => {
   const tricky = desc({
-    name: 'expected_salary',
-    labelText: '期望薪资（可接受电话沟通）'
+    name: 'wechat',
+    labelText: '微信（可接受电话沟通）'
   });
   const rule = R.createRule({
-    match: { attrs: ['name'], pattern: 'salary', matchType: 'contains' },
-    target: 'expected_salary',
+    match: { attrs: ['name'], pattern: 'wechat', matchType: 'contains' },
+    target: 'wechat',
     scope: { sitePattern: '' },
     enabled: false
   });
@@ -209,10 +224,10 @@ test('验收 3：禁用规则后回退内置行为', () => {
 });
 
 test('sitePattern 不匹配时不应用用户规则', () => {
-  const tricky = desc({ name: 'expected_salary', labelText: '期望薪资（可接受电话沟通）' });
+  const tricky = desc({ name: 'wechat', labelText: '微信（可接受电话沟通）' });
   const rule = R.createRule({
-    match: { attrs: ['name'], pattern: 'salary', matchType: 'contains' },
-    target: 'expected_salary',
+    match: { attrs: ['name'], pattern: 'wechat', matchType: 'contains' },
+    target: 'wechat',
     scope: { sitePattern: 'jobs.example.com' }
   });
 
@@ -222,7 +237,7 @@ test('sitePattern 不匹配时不应用用户规则', () => {
   );
   assert.equal(
     M.detectFieldType(tricky, { rules: [rule], url: 'https://jobs.example.com/apply' }).key,
-    'expected_salary'
+    'wechat'
   );
 });
 

@@ -124,3 +124,51 @@ Chrome → `chrome://extensions` → 打开开发者模式 → 「加载已解�
 2. 控制台搜索你的 key 片段：**不应**出现（`ai-client.js` / `ai-settings.js` / `options.js` 里没有任何 console 输出 key）。
 3. AI 导入全程不触碰任何网页表单，也不会提交任何东西。
 4. `dist/vendor/pdfjs/` 里只有 `pdf.min.mjs` / `pdf.worker.min.mjs` / LICENSE，没有从网络加载的代码。
+
+---
+
+# 迭代 5：iframe / Shadow DOM / 中国站点（手动验收）
+
+自动测试用 stub DOM 与字段描述符覆盖逻辑；真实站点结构与登录态必须人工点。
+
+## 13. iframe 表单（对应验收 1）
+
+1. 找一个申请表单嵌在 iframe 里的 Greenhouse / Lever 职位页（或本地写一个 `<iframe src="form.html">` 的两页测试站）。
+2. 简历填好姓名 / 邮箱 / 电话 → popup「一键填充当前页面」。
+3. 预期：popup 顶部文案含「扫描 N 个 frame」且 N ≥ 2；报告里子 frame 的字段出现在「已填」；同一个 key 在多个 frame 出现时只显示一条。
+4. 关掉某个 iframe（或让它 404）再填一次：失败的 frame 不应让整次填充报错，其它 frame 仍正常。
+5. 报告「待填」行里跨 frame 重复的 key 只出现一次，并带「（frameA、frameB）」来源标注。
+
+## 14. 多 frame 学习（对应验收 6）
+
+1. 同一个多 frame 页面 → popup「从当前页学习」。
+2. 预期：列表同时包含主页面与子 frame 的字段，每项显示「域名/路径 · 字段名」；字段数 ≥ 2 个 frame 时状态行提示「共 N 个 frame、M 个字段」。
+3. 给子 frame 的字段选目标 → 保存规则 → 规则表里 `sitePattern` 应是**主页面 host**，不是子 frame 域名。
+
+## 15. Shadow DOM（对应验收 2，Workday 系）
+
+1. 打开一个 Workday 申请页（或本地页面：`host.attachShadow({mode:'open'})` 两层嵌套，内层放姓名/邮箱/密码/隐藏 input）。
+2. 「一键填充」后：shadow 内的姓名 / 邮箱被填上；密码框、`display:none`、`aria-hidden` 的框不被填。
+3. 已填列表里 shadow 命中项应带 `shadow` 角标。
+4. 「从当前页学习」能列出 shadow 内字段，selector 形如 `#host >>> div:nth-of-type(1) >>> input:nth-of-type(2)`。
+5. 报告「补填」对 shadow 字段也能定位（`JC_FILL_ONE` 走 `resolvePath`）。
+
+## 16. 中国五站点（对应验收 3，需登录态）
+
+逐个站点打开投递/快速投递弹窗，确认对应输入框被填、且没有误填「当前薪资 / 公司名 / 技能」等：
+
+| 站点 | 重点字段 | 预期 |
+| --- | --- | --- |
+| Boss 直聘 | `name=geekName` / `name=geekMobile` / 弹窗内 `name=email`；另需确认弹窗里用的是通用属性名时也命中：`name=name` / `name=phone` / `name=email` | 姓名 / 手机号 / 邮箱，confidence 满命中，且 `ats` 是 `zhipin`（不是 `lever`） |
+| 智联招聘 | `name=userName` / `id=resumeName` / `name=mobile` | 姓名 / 手机号 |
+| 前程无忧 51job | `id=inputRealName` / `name=mobilePhone` | 姓名 / 手机号 |
+| 拉勾 | `name=userName` / `name=phone` | 姓名 / 手机号 |
+| 猎聘 | `name=realName` / `id=name` / `name=mobile` | 姓名 / 手机号 |
+
+另需确认：
+- 中文 label 直接可见即命中，不需要先建用户规则：`期望薪资` / `到岗时间` / `学历` / `学校` / `专业` / `工作年限` 分别对应 `expected_salary` / `available_date` / `education` / `school` / `major` / `experience_years`（`学历` 不要落到 `school`，`学校` 不要落到 `education`）。
+- 学历下拉：简历写「本科」时能选中「本科及以上」；写「硕士」能选中「研究生」；到岗写「随时」能选中「随时到岗」或「立即到岗」。
+- 期望薪资不会填进「当前薪资」输入框（负向词「当前 / 现有」生效）。
+- 站点改版导致规则失效时，仍能靠中文词库或「从当前页学习」补救。
+
+> 以上四节没有自动断言；自动测试只证明「给定描述符 / stub DOM 时逻辑正确」，不代表真实站点已逐站回归。

@@ -2,6 +2,16 @@
 
 一键求职填充 Chrome 插件（Manifest V3，零依赖）：填一次简历，在任意 ATS 表单上只点一下。
 
+## 迭代 5 新增（真实可用性：iframe / Shadow DOM / 中国站点）
+
+对着真实站点补三个致命缺口：表单在 iframe 里、字段在 Shadow DOM 里、公司用的是国内招聘站。
+
+1. **iframe 表单**：`content_scripts.all_frames: true`，主 frame 与所有子 frame 各自收集/填充。popup 先用 `chrome.scripting.executeScript({allFrames:true})` 拿 frame 清单（过滤 `about:blank`/`data:`），再逐 frame 发 `JC_FILL`，最后用 `lib/frames.js` 的 `mergeFrameResults` 合并：**跨 frame 同 key 只显示一次**（filled 保留第一次的值、missing/notFound 用 `frames` 标出来源），单个 frame 失败只标 `failed`，不影响整体。报告顶部显示「扫描 N 个 frame」，全部没有字段时才提示「未发现可填字段」。
+2. **Shadow DOM 穿透**：`lib/shadow.js` 递归遍历 `element.shadowRoot`（支持多层嵌套），为每个可填控件生成 `宿主选择器 >>> … >>> 叶子选择器` 的路径；填充时用 `resolvePath` 按路径重新定位（不缓存元素引用）。密码框 / `type=hidden` / `el.hidden` / `aria-hidden` / `display:none` / `disabled` / `readOnly` 在 shadow 内外统一排除。Workday 这类全 Shadow DOM 表单因此可填；content 响应里带 `shadowFields` / `shadowScanned` / `viaShadow` 三个计数与标记，报告里 shadow 命中项带 `shadow` 角标（角标样式待补，当前为纯文本）。
+3. **中国求职站点**：Boss直聘 / 智联 / 51job / 拉勾 / 猎聘的精确规则直接并入 `ATS_RULES` 并排在数组前部（优先于 Greenhouse/Lever/Workday），每条带 `sites` 做 host 隔离（`hostMatches` 严格后缀匹配，`zhipin.com.evil.com` 不算）；`SITE_RULES` 保留为 `ATS_RULES.filter(r => r.sites?.length)` 的兼容视图。Boss 快速投递弹窗的 `name=name` / `name=phone` / `name=email` 这类通用属性名也由站点规则命中（`ats=zhipin`），不再落到通用 Lever 规则。六组中文词条（期望薪资 / 到岗时间 / 学历 / 学校 / 专业 / 工作年限）直接放在 `DICTIONARY`，**不再需要 `options.fieldKeys` 放行**，中文 label 可直接命中；模板既有的 `degree` / `work_years` 作为 `education` / `experience_years` 的取值别名双向兼容（`FIELD_KEY_ALIASES`，取值与 notFound 都按别名处理）。反硬编码红线不变：任意自建 key（如 `wechat`）不在词典里，只能靠用户规则命中。中文 `<select>` 走 `lib/select-match.js`：精确 → 包含式（两侧 ≥ 2 字）→ 同义词组（本科/学士、硕士/研究生、随时/立即、一周内/一周以内…）。站点规则来自公开 DOM 结构推断，**未在真实登录态逐站回归**。
+
+无新增权限、无远程代码；`dist/` 里仍然只有本地文件。
+
 ## 迭代 4 新增（AI 简历导入，BYOK）
 
 不再手抄 PDF：自己配一个 OpenAI 兼容接口（baseURL + API Key + 模型名），上传 PDF/TXT（或粘贴文本）→ AI 抽成结构化字段 → **预览表逐行确认** → 写入简历 → 照常一键填表。
@@ -67,12 +77,15 @@
 
 ```
 src/
-  manifest.json          MV3 声明（content_scripts 顺序：schema → rules → matcher → learner → content）
+  manifest.json          MV3 声明（content_scripts 顺序：schema → rules → matcher → select-match → shadow → frames → learner → content，all_frames:true）
   background/            service worker（安装时初始化存储）
-  content/content.js     DOM 抽取 / 写值 / 高亮 / 消息（JC_FILL、JC_SCAN_FIELDS、JC_FILL_ONE）
+  content/content.js     DOM 抽取（含 shadow）/ 按 path 回定位写值 / 高亮 / 多 frame 消息（JC_FILL、JC_SCAN_FIELDS、JC_FILL_ONE）
   lib/resume-schema.js   简历 schema、自定义字段、slug、校验、导入导出（UMD）
   lib/rules.js           用户规则引擎：创建/校验/匹配/排序（UMD，纯函数）
-  lib/field-matcher.js   字段识别：用户规则 → ATS → 字典（UMD，纯函数）
+  lib/field-matcher.js   字段识别：用户规则 → 站点/ATS 规则 → 字典 + 预置词库（UMD，纯函数）
+  lib/shadow.js          Shadow DOM 遍历、路径重建、shadow 内排除规则（UMD，纯函数）
+  lib/frames.js          多 frame 结果合并去重、frame 标签、学习条目打标（UMD，纯函数）
+  lib/select-match.js    中文 select 值匹配：精确 / 包含 / 同义词组（UMD，纯函数）
   lib/learner.js         从当前页学习：扫描、选择器、生成规则（UMD，纯函数）
   lib/storage.js         chrome.storage 封装（jc.resume / jc.rules，schemaVersion 2）
   lib/template.js        三组模板、完整度、自定义项增删、防抖保存器（UMD，纯函数）
@@ -95,7 +108,7 @@ docs/                    验收对照与手动测试步骤
 
 ```bash
 npm test          # node --test tests/
-npm run smoke     # 6 个识别场景
+npm run smoke     # 18 个识别场景（含中国五站点表单 + 中文「期望薪资」）
 npm run build     # 校验 + 产出 dist/（含 dist/vendor/pdfjs）
 ```
 
@@ -116,10 +129,13 @@ npm run build     # 校验 + 产出 dist/（含 dist/vendor/pdfjs）
 
 数据默认只存在本机 `chrome.storage.local`（`jc.resume` / `jc.rules` / `jc.pending` / `jc.aiSettings`）。**唯一的出网行为**是你主动点「开始解析」时，把简历文本发到**你自己配置的 baseURL**（不经过任何中转服务器）；AI Key 不会随导出 JSON 泄露。填充、补填、AI 导入都永远不会点提交按钮。
 
-## 已知边界（迭代 4）
+## 已知边界（迭代 5）
 
 - **扫描件 PDF 不做 OCR**：提取不到文本层时只提示改用「粘贴文本」。
 - **不做流式输出**：请求会等到完整响应（默认超时 60 秒），期间只有状态文案，没有逐字输出。
 - **单文件、不批量、不支持 docx**（PRD 明确排除，后续迭代）。
 - **PDF 解析依赖真实 Chrome**：Node 只能测纯函数与静态约束（本地 pdf.js、无 CDN、worker 走 `chrome.runtime.getURL`）；真实 PDF 的页数/文本质量需按 `docs/MANUAL-TEST.md` 第 10 节人工确认。
-- **iframe 内表单**仍不处理（与迭代 1–3 一致）。
+- **iframe**：跨域 iframe 依赖 `host_permissions` 的 http/https 通配；`about:blank` / `data:` / `chrome-extension://` frame 不扫描。子 frame 里的「补填」按 frame 逐个尝试，第一个成功即止。
+- **Shadow DOM**：只穿透 `element.shadowRoot`（open shadow root）；closed shadow root 浏览器不允许访问。普通 DOM 元素的 path 是单段选择器（`#id` / `[name]` / `tag:nth-of-type(n)`），同名同结构元素极多时可能定位到第一个匹配项（content 会校验 tag，不一致按失败处理）。
+- **国内站点规则基于公开 DOM 结构推断**：zhipin / zhaopin / 51job / lagou / liepin 的选择器没有在真实登录态页面逐站回归，站点改版会让规则失效；失效时仍可回落到中文词库与「从当前页学习」。
+- **中文 select 同义词组有限**：目前覆盖学历四组与到岗三组，其它枚举值靠精确/包含式匹配。

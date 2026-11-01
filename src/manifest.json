@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "JustClick — 一键求职填充",
-  "version": "0.5.0",
-  "description": "只点一下，把姓名 / 邮箱 / 电话等常用求职字段填进任何 ATS 表单。三组简历模板 + 填充报告（已填/待填/未匹配）+ 待填项跨页携带，支持自定义字段、用户映射规则（从当前页学习），并可用自己的 OpenAI 兼容接口把 PDF/TXT 简历导入成结构化字段（BYOK，pdf.js 本地解析）。内置 Greenhouse、Lever、Workday 适配。",
+  "version": "0.6.1",
+  "description": "只点一下，把姓名 / 邮箱 / 电话等常用求职字段填进任何 ATS 表单。三组简历模板 + 填充报告（已填/待填/未匹配）+ 待填项跨页携带，支持自定义字段、用户映射规则（从当前页学习），并可用自己的 OpenAI 兼容接口把 PDF/TXT 简历导入成结构化字段（BYOK，pdf.js 本地解析）。内置 Greenhouse、Lever、Workday 适配。支持 iframe 表单、Shadow DOM（Workday）、中国求职站点（Boss直聘/智联/51job/拉勾/猎聘）。",
   "permissions": ["storage", "activeTab", "scripting"],
   "host_permissions": ["http://*/*", "https://*/*"],
   "action": {
@@ -23,11 +23,14 @@
         "lib/resume-schema.js",
         "lib/rules.js",
         "lib/field-matcher.js",
+        "lib/select-match.js",
+        "lib/shadow.js",
+        "lib/frames.js",
         "lib/learner.js",
         "content/content.js"
       ],
       "run_at": "document_idle",
-      "all_frames": false
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [
@@ -36,6 +39,8 @@
         "lib/resume-schema.js",
         "lib/rules.js",
         "lib/field-matcher.js",
+        "lib/shadow.js",
+        "lib/frames.js",
         "lib/learner.js"
       ],
       "matches": ["http://*/*", "https://*/*"]

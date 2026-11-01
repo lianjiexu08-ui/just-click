@@ -329,6 +329,9 @@
     getAttr: getAttr,
     selectorFor: selectorFor,
     collectFields: collectFields,
+    // 迭代 5：content.js 用 collectDeep 收集（含 shadow）后，复用这里的 entry 结构
+    // （attrs / label / suggestedKey / selector），避免两套字段清单漂移。
+    entryForElement: entryFor,
     suggestRuleFor: suggestRuleFor,
     buildRulesFromSelection: buildRulesFromSelection
   };

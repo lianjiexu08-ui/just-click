@@ -112,9 +112,33 @@
     return '';
   }
 
-  function descriptorFor(el) {
+  /**
+   * 向上最多 4 层祖先的 className 拼接（小写、截 120 字）。
+   * 国内站点常用容器类名表达语义（如 Boss 直聘快速投递弹窗的 .dialog），
+   * 站点规则里的 containerClass 约束靠它命中。
+   */
+  function containerClassFor(el) {
+    var parts = [];
+    var node = el;
+    for (var i = 0; i < 4 && node; i++) {
+      var cls = '';
+      try {
+        if (typeof node.className === 'string') cls = node.className;
+        else if (node.getAttribute) cls = node.getAttribute('class') || '';
+      } catch (e) {
+        cls = '';
+      }
+      if (cls) parts.push(String(cls).toLowerCase());
+      // 跨越 shadow 边界继续往上找宿主
+      node = node.parentElement || (node.parentNode && node.parentNode.host) || null;
+    }
+    return parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, 120);
+  }
+
+  function descriptorFor(el, meta) {
     var tag = (el.tagName || '').toLowerCase();
     var type = (el.getAttribute('type') || '').toLowerCase();
+    var info = meta || {};
     var desc = {
       tag: tag,
       type: type,
@@ -124,10 +148,13 @@
       ariaLabel: el.getAttribute('aria-label') || '',
       title: el.getAttribute('title') || '',
       className: typeof el.className === 'string' ? el.className : '',
+      containerClass: containerClassFor(el),
       dataAutomationId: el.getAttribute('data-automation-id') || el.getAttribute('data-automationid') || '',
       labelText: labelTextFor(el),
       nearbyText: '',
-      fillable: true
+      fillable: true,
+      // 迭代 5：shadow 元素的宿主选择器链（普通 DOM 为空串）
+      shadowPath: info.inShadow && info.path ? info.path : ''
     };
 
     if (tag === 'textarea') {
@@ -153,18 +180,67 @@
     return desc;
   }
 
+  /**
+   * 收集可填字段（含 Shadow DOM）。
+   * 每个可填元素保留 path：填充时按 path 重新定位，不跨消息缓存元素引用。
+   */
   function collectFillables() {
-    var nodes = document.querySelectorAll('input, textarea, select');
     var fillables = [];
     var descriptors = [];
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      var desc = descriptorFor(el);
+    var entries = [];
+
+    if (window.JC && typeof window.JC.collectDeep === 'function') {
+      entries = window.JC.collectDeep(document, { isVisible: isVisible });
+    } else {
+      // 老注入（lib/shadow.js 未加载）时的降级路径，保证填充不会整体失效
+      var nodes = document.querySelectorAll('input, textarea, select');
+      for (var n = 0; n < nodes.length; n++) {
+        entries.push({ el: nodes[n], path: '', inShadow: false, type: '' });
+      }
+    }
+
+    for (var i = 0; i < entries.length; i++) {
+      var entry = entries[i];
+      if (!entry || !entry.el) continue;
+      var desc = descriptorFor(entry.el, entry);
       if (!desc.fillable) continue;
-      fillables.push(el);
+      var tag = (entry.el.tagName || '').toLowerCase();
+      fillables.push({
+        el: entry.el,
+        path: entry.path || '',
+        inShadow: entry.inShadow === true,
+        tag: tag,
+        type: desc.type
+      });
       descriptors.push(desc);
     }
     return { fillables: fillables, descriptors: descriptors };
+  }
+
+  /**
+   * 按 path 重新定位；定位失败（DOM 变了 / 选择器非法）返回 null。
+   * 普通 DOM 的 path 就是单段选择器，shadow 的 path 用 HOST_SEP 串起来。
+   */
+  function resolveFillable(fillable) {
+    if (!fillable) return null;
+    if (!fillable.path) return fillable.el;
+    if (!window.JC || typeof window.JC.resolvePath !== 'function') return fillable.el;
+    var el = window.JC.resolvePath(document, fillable.path);
+    if (!el) return null;
+    if (el === fillable.el) return el;
+    // 普通 DOM 的 path 是单段选择器（如 input:nth-of-type(1)），文档里可能先命中
+    // 另一个同结构字段。原节点还在树上时优先用它，只有它被替换/移除时才用 path 新节点。
+    try {
+      if (fillable.el && typeof document.contains === 'function' && document.contains(fillable.el)) {
+        return fillable.el;
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    // 选择器可能命中同名但不同类型的元素，tag 不一致就当作定位失败
+    var tag = (el.tagName || '').toLowerCase();
+    if (fillable.tag && tag !== fillable.tag) return null;
+    return el;
   }
 
   /* -------------------------------------------------------------- 写值 */
@@ -183,20 +259,41 @@
     el.dispatchEvent(new Event('blur', { bubbles: true }));
   }
 
+  /**
+   * 下拉框赋值：匹配逻辑在 lib/select-match.js（精确 → 包含 → 同义词组），
+   * 这里只负责 selectedIndex + 事件。匹配不到返回 false，由调用方记 failures。
+   */
   function setSelectValue(el, value) {
-    var target = String(value).toLowerCase();
     var options = el.options || [];
+    var mapped = [];
     for (var i = 0; i < options.length; i++) {
-      var text = (options[i].textContent || '').trim().toLowerCase();
-      var val = (options[i].value || '').trim().toLowerCase();
-      if (text === target || val === target) {
-        el.selectedIndex = i;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return true;
+      mapped.push({
+        text: options[i].textContent || options[i].text || '',
+        value: options[i].value || ''
+      });
+    }
+
+    var index = -1;
+    if (window.JC && typeof window.JC.matchSelectOption === 'function') {
+      index = window.JC.matchSelectOption(mapped, value);
+    } else {
+      // 降级：select-match.js 未注入时只做归一化精确匹配
+      var target = String(value).toLowerCase().replace(/\s+/g, '');
+      for (var j = 0; j < mapped.length; j++) {
+        var text = String(mapped[j].text).toLowerCase().replace(/\s+/g, '');
+        var val = String(mapped[j].value).toLowerCase().replace(/\s+/g, '');
+        if (text === target || val === target) {
+          index = j;
+          break;
+        }
       }
     }
-    return false;
+
+    if (index < 0) return false;
+    el.selectedIndex = index;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
   }
 
   function highlight(el) {
@@ -283,13 +380,25 @@
     var filledItems = [];
     var ruleHits = [];
     var failures = [];
+    var shadowFields = 0;
+    var shadowScanned = 0;
+
+    for (var s = 0; s < collected.fillables.length; s++) {
+      if (collected.fillables[s] && collected.fillables[s].inShadow) shadowScanned++;
+    }
 
     for (var i = 0; i < plan.assignments.length; i++) {
       var a = plan.assignments[i];
-      var el = collected.fillables[a.index];
-      if (!el) continue;
+      var fillable = collected.fillables[a.index];
+      if (!fillable) continue;
+      // 收集 → 写入之间页面可能重渲染，按 path 重新定位而不是用旧引用
+      var el = resolveFillable(fillable);
+      if (!el) {
+        failures.push(a.label);
+        continue;
+      }
       try {
-        if (el.tagName === 'SELECT') {
+        if ((el.tagName || '').toUpperCase() === 'SELECT') {
           if (!setSelectValue(el, a.value)) {
             failures.push(a.label);
             continue;
@@ -299,7 +408,12 @@
         }
         highlight(el);
         filledLabels.push(a.label);
-        filledItems.push({ key: a.key, label: a.label, value: a.value });
+        var item = { key: a.key, label: a.label, value: a.value };
+        if (fillable.inShadow) {
+          item.shadow = true;
+          shadowFields++;
+        }
+        filledItems.push(item);
         if (filledKeys.indexOf(a.key) === -1) filledKeys.push(a.key);
         if (a.ruleId && ruleHits.indexOf(a.ruleId) === -1) ruleHits.push(a.ruleId);
       } catch (e) {
@@ -324,7 +438,8 @@
     if (notFound.length) detailParts.push('页面没有：' + notFound.join('、'));
     if (failures.length) detailParts.push('填充失败：' + failures.join('、'));
 
-    showToast(summary, detailParts.join('；'));
+    // 多 frame 下每个 iframe 都弹一条会糊满页面，只在本 frame 真的填了东西时提示
+    if (filledLabels.length) showToast(summary, detailParts.join('；'));
 
     return {
       ok: true,
@@ -339,7 +454,12 @@
       failures: failures,
       scanned: collected.descriptors.length,
       matched: plan.assignments.length + plan.missing.length,
-      ruleHits: ruleHits
+      ruleHits: ruleHits,
+      // 迭代 5：多 frame / shadow 的元信息
+      frameUrl: location.href,
+      shadowFields: shadowFields,
+      shadowScanned: shadowScanned,
+      viaShadow: shadowFields > 0
     };
   }
 
@@ -359,7 +479,11 @@
     var el = null;
     if (message.selector) {
       try {
-        el = document.querySelector(message.selector);
+        if (window.JC && typeof window.JC.isShadowPath === 'function' && window.JC.isShadowPath(message.selector)) {
+          el = window.JC.resolvePath(document, message.selector);
+        } else {
+          el = document.querySelector(message.selector);
+        }
       } catch (e) {
         el = null;
       }
@@ -382,14 +506,14 @@
         url: location.href
       });
       if (plan.assignments.length) {
-        el = collected.fillables[plan.assignments[0].index];
+        el = resolveFillable(collected.fillables[plan.assignments[0].index]);
       }
     }
 
     if (!el) return { ok: false, error: '页面上找不到这个字段', filled: 0, submitted: false };
 
     try {
-      if (el.tagName === 'SELECT') {
+      if ((el.tagName || '').toUpperCase() === 'SELECT') {
         if (!setSelectValue(el, value)) {
           return { ok: false, error: '下拉框里没有这个选项', filled: 0, submitted: false };
         }
@@ -402,6 +526,52 @@
     } catch (e) {
       return { ok: false, error: String((e && e.message) || e), filled: 0, submitted: false };
     }
+  }
+
+  /**
+   * 学习流扫描：走 collectDeep，因此 iframe 里的 content script 也能把 Shadow DOM
+   * 内的字段列出来。selector 直接用 path（可能含 HOST_SEP），保证后续 JC_FILL_ONE
+   * 能按 shadow 路径回定位。
+   */
+  function scanEntries() {
+    var out = [];
+    if (!window.JC) return out;
+
+    if (typeof window.JC.collectDeep !== 'function') {
+      // 降级：没有 shadow 模块时退回迭代 2 的普通扫描
+      return typeof window.JC.collectFields === 'function'
+        ? window.JC.collectFields(document, { isVisible: isVisible })
+        : out;
+    }
+
+    var deep = window.JC.collectDeep(document, { isVisible: isVisible });
+    for (var i = 0; i < deep.length; i++) {
+      var found = deep[i];
+      if (!found || !found.el) continue;
+      var entry = null;
+      if (typeof window.JC.entryForElement === 'function') {
+        entry = window.JC.entryForElement(found.el, i);
+      }
+      if (!entry) {
+        var tag = (found.el.tagName || '').toLowerCase();
+        entry = {
+          index: i,
+          tag: tag,
+          type: found.type || tag,
+          label: '',
+          attrs: {},
+          selector: found.path || '',
+          suggestedKey: '',
+          suggestedBy: ''
+        };
+      }
+      entry.selector = found.path || entry.selector || '';
+      entry.path = entry.selector;
+      entry.inShadow = found.inShadow === true;
+      entry.frameUrl = location.href;
+      out.push(entry);
+    }
+    return out;
   }
 
   /* -------------------------------------------------------------- 消息 */
@@ -417,17 +587,30 @@
 
     if (message.type === 'JC_SCAN_FIELDS') {
       try {
-        if (!window.JC || typeof window.JC.collectFields !== 'function') {
-          sendResponse({ ok: false, error: '学习模块未加载，请刷新页面后重试', url: location.href, entries: [] });
+        if (!window.JC) {
+          sendResponse({
+            ok: false,
+            error: '学习模块未加载，请刷新页面后重试',
+            url: location.href,
+            frameUrl: location.href,
+            entries: []
+          });
           return undefined;
         }
         sendResponse({
           ok: true,
           url: location.href,
-          entries: window.JC.collectFields(document, { isVisible: isVisible })
+          frameUrl: location.href,
+          entries: scanEntries()
         });
       } catch (e) {
-        sendResponse({ ok: false, error: String((e && e.message) || e), url: location.href, entries: [] });
+        sendResponse({
+          ok: false,
+          error: String((e && e.message) || e),
+          url: location.href,
+          frameUrl: location.href,
+          entries: []
+        });
       }
       return undefined;
     }

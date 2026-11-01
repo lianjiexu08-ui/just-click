@@ -75,6 +75,20 @@
     summary: '经历摘要'
   };
 
+  /**
+   * 迭代 5：字段 key 双向别名。
+   *
+   * 模板（template.js）里既有的预置项是 `degree` / `work_years`，而字段识别
+   * 引擎的 canonical key 是 `education` / `experience_years`。两边都要能取到值：
+   * resolveValue 取不到时按这张表回落，buildFillPlan 也复用同一张表。
+   */
+  var FIELD_KEY_ALIASES = {
+    education: ['degree'],
+    degree: ['education'],
+    experience_years: ['work_years'],
+    work_years: ['experience_years']
+  };
+
   /** options 页的表单配置（顺序即渲染顺序） */
   var FORM_FIELDS = [
     { path: 'basics.fullName', key: 'fullName', label: '姓名', placeholder: '张三 / San Zhang' },
@@ -438,6 +452,16 @@
     return false;
   }
 
+  /** 从 customFields 里取某个 key 的原始值（不做别名回落） */
+  function customFieldValue(resume, key) {
+    if (!isPlainObject(resume) || !Array.isArray(resume.customFields)) return '';
+    for (var i = 0; i < resume.customFields.length; i++) {
+      var field = resume.customFields[i];
+      if (isPlainObject(field) && field.key === key) return field.value;
+    }
+    return '';
+  }
+
   /** 取某个字段最终要填入的值（含组合/回退规则） */
   function resolveValue(resume, fieldKey) {
     if (!isPlainObject(resume)) return '';
@@ -462,11 +486,13 @@
         if (isBuiltinFieldKey(fieldKey)) {
           v = basics[fieldKey];
         } else if (Array.isArray(resume.customFields)) {
-          for (var i = 0; i < resume.customFields.length; i++) {
-            var field = resume.customFields[i];
-            if (isPlainObject(field) && field.key === fieldKey) {
-              v = field.value;
-              break;
+          v = sanitizeText(customFieldValue(resume, fieldKey));
+          // 迭代 5：education ↔ degree、experience_years ↔ work_years 双向兼容
+          if (!v) {
+            var aliases = FIELD_KEY_ALIASES[fieldKey] || [];
+            for (var a = 0; a < aliases.length; a++) {
+              v = sanitizeText(customFieldValue(resume, aliases[a]));
+              if (v) break;
             }
           }
         }
@@ -514,6 +540,7 @@
     TOP_KEYS: TOP_KEYS,
     FIELD_KEYS: FIELD_KEYS,
     FIELD_LABELS: FIELD_LABELS,
+    FIELD_KEY_ALIASES: FIELD_KEY_ALIASES,
     FORM_FIELDS: FORM_FIELDS,
     isPlainObject: isPlainObject,
     sanitizeText: sanitizeText,
