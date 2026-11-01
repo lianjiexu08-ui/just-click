@@ -162,3 +162,43 @@ popup 增加「从当前页学习」按钮：
 5. 测试连接按钮：mock fetch 三分支（200/401/网络错误）单测
 6. build 后 `dist/vendor/pdfjs/` 存在且 manifest/web_accessible 资源不含远程 URL；grep 全仓库无 CDN 链接
 7. 迭代 1-3 全部测试不回归；新增测试 ≥ 10；`npm test`/`npm run smoke`/`npm run build` 全绿
+
+---
+
+# 迭代 5：真实可用性——iframe / Shadow DOM / 中国求职站点
+
+## 审计结论（为什么是这三个）
+迭代 1-4 的引擎与 AI 链路已验证，但对着真实站点有致命缺口：
+1. `manifest.json` 的 `content_scripts.all_frames=false`——**Greenhouse/Lever 的申请表单就是 iframe 嵌入的**，脚本根本注入不进去，「支持 Greenhouse」目前名存实亡；
+2. content.js 完全没有 shadowRoot 遍历——**Workday 全系大量使用 Shadow DOM**，同样填不进；
+3. 只有 greenhouse/lever/workday 三套规则——用户场景（中文简历/手机号/期望薪资）明显是国内求职，**Boss直聘/智联/51job/拉勾/猎聘零适配**。
+
+## 需求 1：iframe 表单支持（all_frames）
+- manifest `all_frames: true`（matches 不变 http/https 全站）
+- popup 填充流：向 active tab 的**所有 frame** 广播（chrome.tabs.sendMessage 带 frameId 或逐 frame 发送），content script 各自收集+填充；**聚合报告**：每个 frame 返回 {frameUrl: 域名+路径, assignments, missing, notFound}，popup 合并去重（跨 frame 的同 key missing 只显示一次，标注来源站点）
+- 「从当前页学习」同样遍历所有 frame
+- 主 frame 与子 frame 都无字段时才显示「未发现可填字段」
+
+## 需求 2：Shadow DOM 穿透
+- 字段收集递归遍历 `shadowRoot`（含多层嵌套 shadow），收集时记录 `shadowPath`（宿主选择器链）；填充时按原路径重新定位（不能缓存元素引用跨消息——popup 触发是两条消息，要重新查询）
+- `isExcluded` 判断在 shadow 内同样生效（type=password 排除、隐藏排除）
+- 单测：jsdom 不支持 shadowRoot，用最小 DOM stub（构造带 shadowRoot 属性的假对象树）验证遍历与路径重建逻辑
+
+## 需求 3：中国求职站点适配
+- 新增 ATS 精确规则（基于公开 DOM 结构）：
+  - `zhipin.com`（Boss直聘快速投递弹窗：name/phone/email + .dialog 容器）
+  - `zhaopin.com`（智联投递弹窗）
+  - `51job.com`（前程无忧申请表）
+  - `lagou.com`（拉勾投递）
+  - `liepin.com`（猎聘）
+- 中文词库扩展（DICTIONARY）：期望薪资（薪资/待遇/月薪/年薪）、到岗时间（到岗/入职时间/上岗）、学历（学历/教育程度）、学校（学校/院校/毕业院校）、专业（专业/方向）、工作年限（工作年限/工作经验/年经验）
+- 中文 select 值匹配：本科/硕士/大专 等（值匹配大小写不敏感 + 包含式）；「一周内/随时/一个月内」到岗语义归一到原文直填
+- 每个站点规则在 smoke 里配一个「字段样本 → 期望 key」用例（Boss直聘 phone 弹窗必测）
+
+## 验收标准（全部必须）
+1. manifest all_frames=true；popup 聚合多 frame 报告（单测：两个 frame 结果合并去重）
+2. shadow 遍历单测（stub DOM 树）：嵌套 2 层 shadow 可收集、路径重建后能重新定位、password 在 shadow 内仍被排除
+3. 中国站点 smoke：zhipin/zhaopin/51job/lagou/liepin 各 ≥2 个字段样本命中（其中 Boss直聘 name+phone 必测）；中文词库单测（薪资/到岗/学历/专业各 ≥2 变体）
+4. 现有 161 测试不回归；新增测试 ≥ 15；`npm test`/`npm run smoke`/`npm run build` 全绿
+5. build 后 grep dist 无 CDN/远程 URL；all_frames 不改变 matches 范围（仍 http/https）
+6. options「从当前页学习」在多 frame 页面能列出子 frame 字段（标注 frame 域名）
