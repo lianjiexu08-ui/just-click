@@ -8,7 +8,8 @@
     "test": "node --test tests/",
     "build": "node scripts/build.mjs",
     "verify": "npm run build && npm test",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "e2e": "node scripts/e2e-ai-test.mjs"
   },
   "engines": {
     "node": ">=18"
