@@ -207,3 +207,51 @@ Node 里跑不出浏览器行为，见 `docs/MANUAL-TEST.md` 第 9–12 节：
 ## 需要人工点一遍的部分（迭代 5）
 
 见 `docs/MANUAL-TEST.md` 第 13–16 节：真实 Greenhouse/Lever iframe 表单、Workday Shadow DOM 表单、五个国内站点的登录态投递弹窗、多 frame 学习列表。Node 测试用的是 stub DOM 与字段描述符，**不代表真实站点已逐站回归**。
+
+---
+
+# 迭代 6 验收对照（PRD「迭代 6：浏览器 E2E 基建」）
+
+四条全部来自 `PRD.md` 迭代 6 的「验收」。本轮实测时间：2026-11-02（Asia/Shanghai），版本 0.7.0。
+
+| # | 验收标准 | 落点（文件 / 用例） | 本轮实测 |
+| --- | --- | --- | --- |
+| 1 | `npm run e2e` 全绿，≥6 个用例（4 mock 页 + iframe + shadow） | `tests/e2e/run.mjs` 的 `CASES`：①greenhouse 四字段+高亮+开放问题留空+不点提交 ②zhipin 弹窗三项 ③workday 两层 shadow+password 留空 ④iframe 内填充+父页不动 ⑤高亮 2200ms 归零 ⑥报告契约。fixtures 见 `tests/e2e/fixtures/*.html` | `E2E_SUMMARY cases=6 pass=6 fail=0`，`EXIT_E2E=0`；单用例 69–2379ms，均 < 15s |
+| 2 | GGB 验证门禁跑 `npm run e2e` 计入结论 | `package.json` → `scripts.e2e = "node tests/e2e/run.mjs"`；runner 第一步自己执行 `scripts/build.mjs`（dist 被 gitignore，不能假设已构建） | `npm run e2e` 首行输出「✔ build 完成（src → dist，25 个文件）」后进入用例，`EXIT_E2E=0` |
+| 3 | `npm test` 204 不回归；新增文件不破坏 build（e2e/ 不进 dist） | `tests/e2e-config.test.js`（7 条）：依赖/脚本契约、三个 fixture 关键字段、无远程资源、e2e 不进 dist、`channel: 'chromium'` + `--load-extension`；`tests/pdf-vendor.test.js:154` 只同步版本断言 0.6.1 → 0.7.0 | `npm test`：**211 tests / 211 pass / 0 fail**（204 既有 + 7 新增，既有断言除版本号外零改动）；`find dist -path '*e2e*' | wc -l` = **0**；`EXIT_BUILD=0` |
+| 4 | PRD 更新使用说明（如何本地跑 E2E） | `PRD.md` 迭代 6 章节末尾「## 使用说明（本地跑 E2E）」；`README.md` 顶部「迭代 6 新增」+「开发与验证」补 `npm run e2e` / `npm run e2e:ai` | 两处均已写入；`README.md` 的测试计数同步为 211 |
+
+## 迭代 6 实测记录（原始命令）
+
+```bash
+npm test 2>&1 | tail -20; echo EXIT_TEST=$?      # tests 211 / pass 211 / fail 0  → EXIT_TEST=0
+npm run smoke 2>&1 | tail -8; echo EXIT_SMOKE=$? # smoke 通过：18 项场景全绿    → EXIT_SMOKE=0
+npm run build 2>&1 | tail -6; echo EXIT_BUILD=$? # dist 25 个文件               → EXIT_BUILD=0
+npm run e2e 2>&1; echo EXIT_E2E=$?              # E2E_SUMMARY cases=6 pass=6 fail=0 → EXIT_E2E=0
+```
+
+补充证据：
+
+- `node --check` 扫 `tests/e2e/run.mjs`、`tests/e2e/lib/*.mjs`、`tests/e2e-config.test.js`、`scripts/*.mjs`：**0 个 SYNTAX_FAILED**。
+- 负向对照（故障注入）：把 greenhouse 首个字段的 `id` / `name` / label 同时改成 `given_name` / `Given name` 后重跑 → `✗ [1/6] … First name 期望 "三"，实际 null`、`✗ [4/6]`、`✗ [5/6]`，`E2E_SUMMARY cases=6 pass=3 fail=3`、`EXIT_E2E=1`，`tests/e2e/.artifacts/` 生成 3 组 png/html/error.txt；恢复 fixture 后重跑 6/6 全绿。证明断言读的是浏览器真实 DOM，不是「恒真断言」。
+- 详细报告（含 Phase 0 环境探针原文、hash、已知限制）：`docs/E2E-REPORT.md`。
+
+> 迭代 6 未修改 `src/` 行为（仅 `src/manifest.json` 版本号 0.6.1 → 0.7.0）；未引入 playwright 之外的依赖；未把 `dist/` 纳入交付。
+
+## 迭代 6 门禁返修（平台验证第 1 次失败后）
+
+平台门禁跑 `npm run test` 失败（`pass 210 / fail 1`），失败断言：
+
+```
+✖ 迭代 6：workday 是两层 shadow，iframe 页内嵌 greenhouse
+  AssertionError: workday 必须是两层 shadowRoot
+  4 !== 2   at tests/e2e-config.test.js:74
+```
+
+根因与处置（三处，均为最小改动）：
+
+1. **fixture 注释漂移**：`tests/e2e/fixtures/workday-shadow-mock.html` 的注释里多了两个 `attachShadow` 字样，而断言 `(shadow.match(/attachShadow/g)||[]).length === 2` 按字面量计数（注释也参与）→ 4≠2。注释已恢复为已验证措辞，`attachShadow` 只剩第 23、34 行两处真实调用，文件 sha256 回到 `812001d4…`；**断言本身未放宽**。
+2. **`npm test` 的发现范围**：`node --test tests/` 在部分 Node 版本下会把 `tests/e2e/run.mjs`（`import 'playwright'`）当单测执行，门禁环境无 `node_modules` 时必失败。改为 `node --test tests/*.test.js`。
+3. **系统临时目录耦合**：「e2e 不进 dist」用例原先在 `os.tmpdir()` 下建临时 root，沙箱/CI 里系统临时目录可能不可写。改为仓库内 `.tmp-build-check-*`（已进 `.gitignore`，用完即删）。
+
+返修后实测（与门禁同构：干净副本、无 `node_modules`）：`npm test` **211/211/0，EXIT_TEST=0**；`TMPDIR=/nonexistent-jc npm test` 同样 211/211/0；带依赖时 smoke 18 项、build 成功（28 文件）、e2e 6/6，`EXIT_SMOKE/EXIT_BUILD/EXIT_E2E` 全 0；`find dist -path '*e2e*'` 仍为 0。详细记录见 `docs/E2E-REPORT.md` 第 7 节。

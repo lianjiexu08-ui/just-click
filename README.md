@@ -2,6 +2,17 @@
 
 一键求职填充 Chrome 插件（Manifest V3，零依赖）：填一次简历，在任意 ATS 表单上只点一下。
 
+## 迭代 6 新增（浏览器 E2E：Playwright + 真扩展 + mock ATS）
+
+单测与 smoke 都是字段样本级的，证明不了「真浏览器里点一下能不能填」。迭代 6 把这条链路补成可执行门禁：
+
+1. **真浏览器 + 真扩展**：`npm run e2e` 用 Playwright 启动 `channel: 'chromium'` 的 Chrome for Testing（默认 headless 是 headless shell，**不支持扩展**），`--load-extension=<abs dist>` 加载构建产物；扩展的 MV3 service worker 必须在 ~1s 内出现。
+2. **mock ATS 站点**：`tests/e2e/fixtures/` 四个纯静态页，零外部资源 —— Greenhouse 标准申请表（四字段 + 开放问题 textarea + 提交按钮计数）、Boss 直聘风格投递弹窗（`.dialog-wrap`，中文字段）、Workday 两层 shadowRoot（最内层放姓/名/邮箱，外加一个必须保持为空的 password）、iframe 父页（`company_site` + 内嵌 Greenhouse）。
+3. **复用真实协议，不加测试钩子**：runner 在 SW 里 `chrome.storage.local.set({'jc.resume': ...})` 注入 schema 合法的简历（仓库自己的 `resume-schema.js` 生成），再按 popup 的真实做法枚举 frame：`chrome.scripting.executeScript({allFrames:true})` → 逐 frame `chrome.tabs.sendMessage({type:'JC_FILL'})`。**没有** `window.__justclick_fill__`，`src/` 行为零改动。
+4. **6 个用例**：Greenhouse 四字段 + 高亮 + 开放问题留空 + 不点提交；Boss 弹窗三项；Workday 两层 shadow（password 仍空）；iframe 内填充且父页不动；高亮 2200ms 后归零；报告契约（`filled/filledItems/notFound/missing`）。单用例 15s 超时，失败落截图 + HTML 到 `tests/e2e/.artifacts/`。
+
+`npm test` 里另有 `tests/e2e-config.test.js` 守配置（不依赖 playwright 也能跑）：依赖/脚本契约、fixture 关键字段、无远程资源、e2e 不进 `dist`、runner 必须 `channel: 'chromium'` + `--load-extension`。
+
 ## 迭代 5 新增（真实可用性：iframe / Shadow DOM / 中国站点）
 
 对着真实站点补三个致命缺口：表单在 iframe 里、字段在 Shadow DOM 里、公司用的是国内招聘站。
@@ -107,12 +118,14 @@ docs/                    验收对照与手动测试步骤
 ## 开发与验证
 
 ```bash
-npm test          # node --test tests/
+npm test          # node --test tests/*.test.js（211 条：204 既有 + 7 条 E2E 配置门禁）
 npm run smoke     # 18 个识别场景（含中国五站点表单 + 中文「期望薪资」）
 npm run build     # 校验 + 产出 dist/（含 dist/vendor/pdfjs）
+npm run e2e       # 真 Chromium + 真扩展 + mock ATS 的 6 个端到端用例（会先自动 build）
+npm run e2e:ai    # 旧的「真实 AI 链路」端到端脚本，需要真实 API Key
 ```
 
-零依赖，无需 `npm install`（Node ≥ 18）。
+源码零依赖（Node ≥ 18）；只有跑 `npm run e2e` 需要 `npm install`（devDependency：playwright 1.63.0 + 本机 chromium）。
 
 ## 安装
 

@@ -172,3 +172,33 @@ Chrome → `chrome://extensions` → 打开开发者模式 → 「加载已解�
 - 站点改版导致规则失效时，仍能靠中文词库或「从当前页学习」补救。
 
 > 以上四节没有自动断言；自动测试只证明「给定描述符 / stub DOM 时逻辑正确」，不代表真实站点已逐站回归。
+
+## 17. 浏览器 E2E（迭代 6，对应验收 1）
+
+这一节不是「手工点插件」，而是「手工确认 E2E 基建本身没骗人」——E2E 全绿只证明 mock 页可用，不证明真实站点可用。
+
+准备：
+
+```bash
+npm install          # 首次；装 playwright（chromium 由 playwright 自己管理）
+npm run build        # 可选：npm run e2e 会先自动 build
+npm run e2e          # 期望结尾 E2E_SUMMARY cases=6 pass=6 fail=0，退出码 0
+```
+
+逐条确认：
+
+1. **真的加载了扩展**：`npm run e2e` 日志里出现 `chrome-extension://<id>/background/service-worker.js`，不是「只在 node 里 mock 了一遍消息」。若日志里出现 headless shell / 没有扩展 id，说明退回了不支持扩展的 headless 模式（必须 `channel: 'chromium'`）。
+2. **四个 mock 页各有用例**：greenhouse（`first_name`/`last_name`/`email`/`phone` + 开放问题 textarea）、Boss 直聘弹窗（姓名/手机号/邮箱）、Workday 两层 shadow、iframe 嵌入。少一个就说明用例被删了。
+3. **开放问题为空**：greenhouse mock 的 textarea 在填充后仍是空字符串，且不出现在 `filledLabels` 里。这条是「不乱填」的底线。
+4. **高亮是临时的**：填充后 `.jc-filled-highlight` 存在，2.2 秒后数量为 0。看到「永久变色」说明 highlight 移除逻辑坏了。
+5. **e2e 不进 dist**：`find dist -path '*e2e*'` 输出为空；`dist/` 里不该出现 fixtures 或 runner。
+6. **不点提交**：mock 页的「提交申请」按钮带计数器，填充后计数仍是 0（插件永远不点提交）。
+
+已知不覆盖（别把 E2E 绿当成真站点已验收）：
+
+| 不覆盖 | 为什么 | 兜底 |
+| --- | --- | --- |
+| 真实 Greenhouse / Lever / Workday / Boss 线上 DOM | mock 页是按公开结构手写的，站点改版不会让 E2E 红 | 第 13–16 节手工逐站验收 + 「从当前页学习」 |
+| 登录态、验证码、风控 | E2E 不登录任何站点 | 真实账号手工走一遍 |
+| 真机 UI（popup 点击手感、options 表单） | E2E 走的是 service worker → content script 的真实消息协议，不点 popup | 第 6–9 节手工 |
+| 无浏览器缓存的 CI 机器 | 首次需 `npx playwright install chromium` | 文档已写；CI 上要么预装缓存，要么先跑这一句 |

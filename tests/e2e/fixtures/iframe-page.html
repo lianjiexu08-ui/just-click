@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>公司官网 + 内嵌申请表（mock iframe）</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 32px; color: #222; }
+  .field { margin-bottom: 16px; max-width: 420px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+  iframe { width: 100%; max-width: 640px; height: 720px; border: 1px solid #ddd; border-radius: 6px; margin-top: 16px; }
+</style>
+</head>
+<body>
+  <h1>申请职位</h1>
+
+  <div class="field">
+    <label for="company_site">公司官网</label>
+    <input id="company_site" name="company_site" type="url" autocomplete="off">
+  </div>
+
+  <iframe id="application-frame" src="greenhouse-mock.html" title="Application form"></iframe>
+</body>
+</html>

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Greenhouse — Apply (mock)</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 32px; color: #222; }
+  form { max-width: 520px; }
+  .field { margin-bottom: 16px; }
+  label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 4px; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px; font-size: 14px; border: 1px solid #ccc; border-radius: 4px; }
+  textarea { min-height: 96px; }
+  button { padding: 10px 18px; font-size: 14px; border: 0; border-radius: 4px; background: #1f7a4d; color: #fff; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h1>Apply for Backend Engineer</h1>
+  <p>Greenhouse ATS mock — 仅用于本地 E2E，不连任何外部资源。</p>
+
+  <form id="application-form" action="#" method="post">
+    <div class="field">
+      <label for="first_name">First name</label>
+      <input id="first_name" name="job_application[first_name]" type="text" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="last_name">Last name</label>
+      <input id="last_name" name="job_application[last_name]" type="text" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="job_application[email]" type="email" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="phone">Phone</label>
+      <input id="phone" name="job_application[phone]" type="tel" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="why">Why do you want to work here?</label>
+      <textarea id="why" name="job_application[questions][why]" rows="4"></textarea>
+    </div>
+    <button id="submit-application" type="button"
+            onclick="window.__submitted = (window.__submitted || 0) + 1;">提交申请</button>
+  </form>
+
+  <script>
+    window.__submitted = 0;
+  </script>
+</body>
+</html>

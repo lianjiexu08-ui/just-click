@@ -230,3 +230,20 @@ popup 增加「从当前页学习」按钮：
 2. GGB 验证门禁跑 `npm run e2e` 计入结论（平台已支持）
 3. `npm test` 204 不回归；新增文件不破坏 build（e2e/ 不进 dist）
 4. PRD 更新使用说明（如何本地跑 E2E）
+
+## 使用说明（本地跑 E2E）
+
+迭代 6 的 E2E 是**真浏览器 + 真扩展**，不是 jsdom 单测：Playwright 启动 `channel: 'chromium'` 的 Chrome for Testing，用 `--load-extension` 加载 `dist/`，再由 runner 起一个只监听 `127.0.0.1` 随机端口的静态服务托管 mock ATS 页。
+
+```bash
+npm install     # 首次：安装 playwright（devDependency，精确 1.63.0）
+npm run e2e     # 跑全部 6 个用例
+```
+
+- **会先自动 build**：`run.mjs` 第一步执行 `node scripts/build.mjs`，失败直接退出 1。原因是 GGB 验证门禁里 e2e 先于 build，而 `dist/` 被 gitignore，不能假设它已存在。
+- **只走本地 http**：mock 页由 `node:http` 提供，监听 `127.0.0.1:0`（随机端口）。不用 `file://`——`content_scripts` 只匹配 `http/https`，`file://` 页面注入不了。
+- **CI 友好**：`CI=1` 时单次执行、不 watch；单用例超时 15s；结尾输出机器可读的 `E2E_SUMMARY cases=6 pass=6 fail=0`，失败时把截图与页面 HTML 落到 `tests/e2e/.artifacts/`（已 gitignore）。
+- **产物不进 dist**：`tests/e2e/` 只被 runner 读取，构建只拷贝 `src/`（+ `vendor/`），`tests/e2e-config.test.js` 会实测这一点。
+- **`npm run e2e:ai` 仍是真实 AI 链路**：旧脚本 `scripts/e2e-ai-test.mjs` 保留原语义（需要真实 API Key 才跑），与离线可跑的 `npm run e2e` 分开，互不替代。
+
+首次跑如果浏览器没装，Playwright 会提示 `npx playwright install chromium`（需要网络）；本机已缓存 `chromium-1243`，无需重复下载。

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workday — My Information (mock, 2 层 shadow)</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 32px; color: #222; }
+  #workday-host { display: block; }
+  .hint { color: #666; font-size: 13px; }
+</style>
+</head>
+<body>
+  <h1>My Information</h1>
+  <p class="hint">Workday ATS mock：字段位于两层 shadowRoot 之内，用于验证深层穿透。</p>
+
+  <div id="workday-host"></div>
+
+  <script>
+    // 两层 shadow root：外层宿主挂一个，内层宿主再挂一个。
+    // 姓 / 名 / 邮箱在最内层；同层再放一个 password，必须保持为空。
+    (function () {
+      var host = document.getElementById('workday-host');
+      var outer = host.attachShadow({ mode: 'open' });
+
+      outer.innerHTML =
+        '<div class="wd-panel"><div class="wd-inner-host" id="inner-host"></div></div>' +
+        '<style>' +
+        '.wd-panel{margin-top:16px;padding:16px;border:1px solid #ddd;border-radius:6px}' +
+        'label{display:block;font-size:13px;font-weight:600;margin:12px 0 4px}' +
+        'input{width:320px;box-sizing:border-box;padding:8px;font-size:14px;border:1px solid #ccc;border-radius:4px}' +
+        '</style>';
+
+      var innerHost = outer.getElementById('inner-host');
+      var inner = innerHost.attachShadow({ mode: 'open' });
+
+      inner.innerHTML =
+        '<div class="wd-form">' +
+        '  <label for="wd-last">姓</label>' +
+        '  <input id="wd-last" name="lastName" type="text" autocomplete="off">' +
+        '  <label for="wd-first">名</label>' +
+        '  <input id="wd-first" name="firstName" type="text" autocomplete="off">' +
+        '  <label for="wd-email">邮箱</label>' +
+        '  <input id="wd-email" name="email" type="email" autocomplete="off">' +
+        '  <label for="wd-password">密码</label>' +
+        '  <input id="wd-password" name="password" type="password" autocomplete="off">' +
+        '</div>';
+
+      window.__shadowDepth = 2;
+    })();
+  </script>
+</body>
+</html>

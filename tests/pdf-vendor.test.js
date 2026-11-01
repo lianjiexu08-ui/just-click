@@ -150,8 +150,8 @@ test('迭代 5：dist 的 all_frames=true、包含 shadow/frames，且无远程�
   const dist = path.join(ROOT, 'dist');
   const distManifest = JSON.parse(fs.readFileSync(path.join(dist, 'manifest.json'), 'utf8'));
   assert.equal(distManifest.content_scripts[0].all_frames, true);
-  // 0.6.1：版本随 package.json / src/manifest.json 同步；这里校验 build 产物不带旧版本
-  assert.equal(distManifest.version, '0.6.1');
+  // 0.7.0：版本随 package.json / src/manifest.json 同步；这里校验 build 产物不带旧版本
+  assert.equal(distManifest.version, '0.7.0');
   assert.ok(fs.existsSync(path.join(dist, 'lib', 'shadow.js')), 'dist/lib/shadow.js 未生成');
   assert.ok(fs.existsSync(path.join(dist, 'lib', 'frames.js')), 'dist/lib/frames.js 未生成');
   assert.ok(fs.existsSync(path.join(dist, 'lib', 'select-match.js')), 'dist/lib/select-match.js 未生成');
